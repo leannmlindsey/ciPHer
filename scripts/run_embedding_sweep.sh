@@ -21,7 +21,7 @@ set -euo pipefail
 ACCOUNT="bfzj-dtai-gh"
 PARTITION="ghx4"
 CONDA_ENV="${CONDA_ENV:-esmfold2}"
-CIPHER_DIR="/projects/bfzj/llindsey1/PHI_TSP/ciPHer/cipher"
+CIPHER_DIR="/projects/bfzj/llindsey1/PHI_TSP/ciPHer"
 
 # ============================================================
 # Data paths on Delta (no symlinks needed)
