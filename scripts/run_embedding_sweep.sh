@@ -66,16 +66,11 @@ EMBEDDINGS=(
     "esm2_650m_seg4     /work/hdd/bfzj/llindsey1/embeddings_segments4/candidates_embeddings_segments4_md5.npz  /work/hdd/bfzj/llindsey1/validation_embeddings_segments4/validation_embeddings_segments4_md5.npz"
     "esm2_3b_mean       ${TRAIN_EMB_ROOT}/embeddings_esm2_3b/candidates_embeddings_md5.npz                  /work/hdd/bfzj/llindsey1/validation_embeddings_esm2_3b/validation_embeddings_md5.npz"
     "esm2_150m_mean     ${TRAIN_EMB_ROOT}/embeddings_esm2_150m/candidates_embeddings_md5.npz                /work/hdd/bfzj/llindsey1/validation_embeddings_esm2_150m/validation_embeddings_md5.npz"
-    "prott5_mean        ${TRAIN_EMB_ROOT}/embeddings_prott5/candidates_embeddings_md5.npz                   /work/hdd/bfzj/llindsey1/validation_embeddings_prott5/validation_embeddings_md5.npz"
 
-    # K-mer features (various alphabets and k values)
+    # K-mer features (best separation results only)
     "kmer_murphy8_k5    ${KMER_ROOT}/candidates_murphy8_k5.npz      ${KMER_ROOT}/validation_murphy8_k5.npz"
-    "kmer_murphy8_k6    ${KMER_ROOT}/candidates_murphy8_k6.npz      ${KMER_ROOT}/validation_murphy8_k6.npz"
-    "kmer_murphy8_k456  ${KMER_ROOT}/candidates_murphy8_k456.npz    ${KMER_ROOT}/validation_murphy8_k456.npz"
     "kmer_murphy10_k5   ${KMER_ROOT}/candidates_murphy10_k5.npz     ${KMER_ROOT}/validation_murphy10_k5.npz"
-    "kmer_murphy10_k45  ${KMER_ROOT}/candidates_murphy10_k45.npz    ${KMER_ROOT}/validation_murphy10_k45.npz"
     "kmer_li10_k5       ${KMER_ROOT}/candidates_li10_k5.npz         ${KMER_ROOT}/validation_li10_k5.npz"
-    "kmer_li10_k45      ${KMER_ROOT}/candidates_li10_k45.npz        ${KMER_ROOT}/validation_li10_k45.npz"
     "kmer_aa20_k3       ${KMER_ROOT}/candidates_aa20_k3.npz         ${KMER_ROOT}/validation_aa20_k3.npz"
     "kmer_aa20_k4       ${KMER_ROOT}/candidates_aa20_k4.npz         ${KMER_ROOT}/validation_aa20_k4.npz"
 )
