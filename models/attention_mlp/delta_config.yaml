@@ -1,0 +1,12 @@
+# Delta-AI paths — overrides base_config.yaml data paths
+# Usage: these values are read by train.py and runner.py
+
+data:
+  association_map: /projects/bfzj/llindsey1/RBP_Structural_Similarity/input/host_phage_protein_map.tsv
+  glycan_binders: /projects/bfzj/llindsey1/RBP_Structural_Similarity/input/glycan_binders_custom.tsv
+  embedding_type: esm2_650m
+  embedding_file: /projects/bfzj/llindsey1/RBP_Structural_Similarity/output/embeddings_binned/candidates_embeddings_md5.npz
+
+validation:
+  data_dir: /projects/bfzj/llindsey1/PHI_TSP/phi_tsp/klebsiella/validation_data/combined
+  fasta: /projects/bfzj/llindsey1/PHI_TSP/phi_tsp/klebsiella/validation_data/combined/validation_inputs/validation_rbps_all.faa

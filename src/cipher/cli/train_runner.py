@@ -108,6 +108,20 @@ def apply_overrides(config, args):
     if args.embedding_file is not None:
         config.setdefault('data', {})['embedding_file'] = args.embedding_file
 
+    # Data path overrides
+    if args.association_map is not None:
+        config.setdefault('data', {})['association_map'] = args.association_map
+    if args.glycan_binders is not None:
+        config.setdefault('data', {})['glycan_binders'] = args.glycan_binders
+
+    # Validation path overrides (saved in config.yaml for cipher-evaluate)
+    if args.val_fasta is not None:
+        config.setdefault('validation', {})['val_fasta'] = args.val_fasta
+    if args.val_embedding_file is not None:
+        config.setdefault('validation', {})['val_embedding_file'] = args.val_embedding_file
+    if args.val_datasets_dir is not None:
+        config.setdefault('validation', {})['val_datasets_dir'] = args.val_datasets_dir
+
     return config
 
 
@@ -374,6 +388,24 @@ Examples:
                         help=f'Path to training embedding NPZ file. Overrides the '
                              f'default path derived from embedding_type. '
                              f'(default: {fmt(d_data.get("embedding_file"))})')
+    parser.add_argument('--association_map',
+                        help=f'Path to host_phage_protein_map.tsv '
+                             f'(default: {fmt(d_data.get("association_map"))})')
+    parser.add_argument('--glycan_binders',
+                        help=f'Path to glycan_binders_custom.tsv '
+                             f'(default: {fmt(d_data.get("glycan_binders"))})')
+
+    # Validation paths (saved in config.yaml for cipher-evaluate to use)
+    d_val = base_cfg.get('validation', {})
+    parser.add_argument('--val_fasta',
+                        help=f'Path to validation protein FASTA '
+                             f'(default: {fmt(d_val.get("val_fasta"))})')
+    parser.add_argument('--val_embedding_file',
+                        help=f'Path to validation embedding NPZ '
+                             f'(default: {fmt(d_val.get("val_embedding_file"))})')
+    parser.add_argument('--val_datasets_dir',
+                        help=f'Path to validation datasets directory '
+                             f'(default: {fmt(d_val.get("val_datasets_dir"))})')
 
     # Naming
     parser.add_argument('--name',

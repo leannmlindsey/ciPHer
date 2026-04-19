@@ -21,6 +21,12 @@ data:
   embedding_type: esm2_650m
   embedding_file: data/training_data/embeddings/esm2_650m_md5.npz
 
+validation:
+  # Paths for cipher-evaluate. Override per-environment.
+  val_fasta: data/validation_data/metadata/validation_rbps_all.faa
+  val_embedding_file: data/validation_data/embeddings/esm2_650m_md5.npz
+  val_datasets_dir: data/validation_data/HOST_RANGE
+
 experiment:
   # Tool filter: which proteins to include based on tool flags.
   # - tools:         keep proteins flagged by ANY of these tools (default: all 8)

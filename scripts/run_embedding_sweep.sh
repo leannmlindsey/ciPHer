@@ -21,7 +21,15 @@ set -euo pipefail
 ACCOUNT="bfzj-dtai-gh"
 PARTITION="ghx4"
 CONDA_ENV="${CONDA_ENV:-esmfold2}"
-CIPHER_DIR="/u/llindsey1/llindsey/PHI_TSP/cipher"
+CIPHER_DIR="/projects/bfzj/llindsey1/PHI_TSP/ciPHer/cipher"
+
+# ============================================================
+# Data paths on Delta (no symlinks needed)
+# ============================================================
+ASSOC_MAP="/projects/bfzj/llindsey1/RBP_Structural_Similarity/input/host_phage_protein_map.tsv"
+GLYCAN_BINDERS="/projects/bfzj/llindsey1/RBP_Structural_Similarity/input/glycan_binders_custom.tsv"
+VAL_FASTA="/projects/bfzj/llindsey1/PHI_TSP/phi_tsp/klebsiella/validation_data/combined/validation_inputs/validation_rbps_all.faa"
+VAL_DATASETS_DIR="/projects/bfzj/llindsey1/PHI_TSP/phi_tsp/klebsiella/validation_data/combined/HOST_RANGE"
 
 # SLURM resources
 GPUS=1
@@ -56,20 +64,20 @@ EMBEDDINGS=(
     # PLM embeddings
     "esm2_650m_mean     ${TRAIN_EMB_ROOT}/embeddings_binned/candidates_embeddings_md5.npz                   ${VAL_EMB_ROOT}/validation_embeddings_md5.npz"
     "esm2_650m_seg4     /work/hdd/bfzj/llindsey1/embeddings_segments4/candidates_embeddings_segments4_md5.npz  /work/hdd/bfzj/llindsey1/validation_embeddings_segments4/validation_embeddings_segments4_md5.npz"
-    "esm2_3b_mean       ${TRAIN_EMB_ROOT}/embeddings_esm2_3b/candidates_embeddings_md5.npz                  MISSING"
-    "esm2_150m_mean     ${TRAIN_EMB_ROOT}/embeddings_esm2_150m/candidates_embeddings_md5.npz                MISSING"
-    "prott5_mean        ${TRAIN_EMB_ROOT}/embeddings_prott5/candidates_embeddings_md5.npz                   MISSING"
+    "esm2_3b_mean       ${TRAIN_EMB_ROOT}/embeddings_esm2_3b/candidates_embeddings_md5.npz                  /work/hdd/bfzj/llindsey1/validation_embeddings_esm2_3b/validation_embeddings_md5.npz"
+    "esm2_150m_mean     ${TRAIN_EMB_ROOT}/embeddings_esm2_150m/candidates_embeddings_md5.npz                /work/hdd/bfzj/llindsey1/validation_embeddings_esm2_150m/validation_embeddings_md5.npz"
+    "prott5_mean        ${TRAIN_EMB_ROOT}/embeddings_prott5/candidates_embeddings_md5.npz                   /work/hdd/bfzj/llindsey1/validation_embeddings_prott5/validation_embeddings_md5.npz"
 
     # K-mer features (various alphabets and k values)
-    "kmer_murphy8_k5    ${KMER_ROOT}/candidates_murphy8_k5.npz      MISSING"
-    "kmer_murphy8_k6    ${KMER_ROOT}/candidates_murphy8_k6.npz      MISSING"
-    "kmer_murphy8_k456  ${KMER_ROOT}/candidates_murphy8_k456.npz    MISSING"
-    "kmer_murphy10_k5   ${KMER_ROOT}/candidates_murphy10_k5.npz     MISSING"
-    "kmer_murphy10_k45  ${KMER_ROOT}/candidates_murphy10_k45.npz    MISSING"
-    "kmer_li10_k5       ${KMER_ROOT}/candidates_li10_k5.npz         MISSING"
-    "kmer_li10_k45      ${KMER_ROOT}/candidates_li10_k45.npz        MISSING"
-    "kmer_aa20_k3       ${KMER_ROOT}/candidates_aa20_k3.npz         MISSING"
-    "kmer_aa20_k4       ${KMER_ROOT}/candidates_aa20_k4.npz         MISSING"
+    "kmer_murphy8_k5    ${KMER_ROOT}/candidates_murphy8_k5.npz      ${KMER_ROOT}/validation_murphy8_k5.npz"
+    "kmer_murphy8_k6    ${KMER_ROOT}/candidates_murphy8_k6.npz      ${KMER_ROOT}/validation_murphy8_k6.npz"
+    "kmer_murphy8_k456  ${KMER_ROOT}/candidates_murphy8_k456.npz    ${KMER_ROOT}/validation_murphy8_k456.npz"
+    "kmer_murphy10_k5   ${KMER_ROOT}/candidates_murphy10_k5.npz     ${KMER_ROOT}/validation_murphy10_k5.npz"
+    "kmer_murphy10_k45  ${KMER_ROOT}/candidates_murphy10_k45.npz    ${KMER_ROOT}/validation_murphy10_k45.npz"
+    "kmer_li10_k5       ${KMER_ROOT}/candidates_li10_k5.npz         ${KMER_ROOT}/validation_li10_k5.npz"
+    "kmer_li10_k45      ${KMER_ROOT}/candidates_li10_k45.npz        ${KMER_ROOT}/validation_li10_k45.npz"
+    "kmer_aa20_k3       ${KMER_ROOT}/candidates_aa20_k3.npz         ${KMER_ROOT}/validation_aa20_k3.npz"
+    "kmer_aa20_k4       ${KMER_ROOT}/candidates_aa20_k4.npz         ${KMER_ROOT}/validation_aa20_k4.npz"
 )
 
 # ============================================================
@@ -100,6 +108,17 @@ for entry in "${EMBEDDINGS[@]}"; do
 
     NAME="sweep_${LABEL}"
 
+    # Pre-submit checks
+    if [ ! -f "$TRAIN_EMB" ]; then
+        echo "  SKIP ${LABEL} — training embeddings not found: ${TRAIN_EMB}"
+        N_SKIPPED=$((N_SKIPPED + 1))
+        continue
+    fi
+    VAL_STATUS="ready"
+    if [ ! -f "$VAL_EMB" ]; then
+        VAL_STATUS="missing (will train only)"
+    fi
+
     # Build train command
     TRAIN_CMD="python -m cipher.cli.train_runner \
         --model ${MODEL} \
@@ -115,14 +134,16 @@ for entry in "${EMBEDDINGS[@]}"; do
         --min_sources ${MIN_SOURCES} \
         --embedding_type ${LABEL} \
         --embedding_file ${TRAIN_EMB} \
+        --association_map ${ASSOC_MAP} \
+        --glycan_binders ${GLYCAN_BINDERS} \
+        --val_fasta ${VAL_FASTA} \
+        --val_datasets_dir ${VAL_DATASETS_DIR} \
+        --val_embedding_file ${VAL_EMB} \
         --name ${NAME}"
 
-    # Build evaluate command
+    # Build evaluate command (reads paths from saved config.yaml)
     EXP_DIR="${CIPHER_DIR}/experiments/${MODEL}/${NAME}"
-    EVAL_CMD="python -m cipher.evaluation.runner ${EXP_DIR}"
-    if [ "$VAL_EMB" != "MISSING" ]; then
-        EVAL_CMD="${EVAL_CMD} --val-embedding-file ${VAL_EMB}"
-    fi
+    EVAL_CMD="python -m cipher.evaluation.runner ${EXP_DIR} --val-embedding-file ${VAL_EMB}"
 
     # Full job script
     JOB_SCRIPT="#!/bin/bash
@@ -149,10 +170,18 @@ echo \"  Val embeddings:   ${VAL_EMB}\"
 echo \"  Started: \$(date)\"
 echo \"======================================\"
 
-# Check files exist
+# Check training embeddings exist
 if [ ! -f \"${TRAIN_EMB}\" ]; then
     echo \"ERROR: Training embedding file not found: ${TRAIN_EMB}\"
     exit 1
+fi
+
+# Check validation files exist before starting
+VAL_READY=true
+if [ ! -f \"${VAL_EMB}\" ]; then
+    echo \"WARNING: Validation embeddings not found: ${VAL_EMB}\"
+    echo \"  Will train but skip evaluation.\"
+    VAL_READY=false
 fi
 
 # Train
@@ -160,15 +189,15 @@ echo \"\"
 echo \"=== TRAINING ===\"
 ${TRAIN_CMD}
 
-# Evaluate (only if val embeddings exist)
-if [ \"${VAL_EMB}\" != \"MISSING\" ] && [ -f \"${VAL_EMB}\" ]; then
+# Evaluate
+if [ \"\${VAL_READY}\" = true ]; then
     echo \"\"
     echo \"=== EVALUATING ===\"
     ${EVAL_CMD}
 else
     echo \"\"
-    echo \"SKIPPING evaluation: validation embeddings not available (${VAL_EMB})\"
-    echo \"Run evaluation later with:\"
+    echo \"SKIPPING evaluation: validation embeddings not yet available.\"
+    echo \"Generate them, then run:\"
     echo \"  ${EVAL_CMD}\"
 fi
 
@@ -181,7 +210,7 @@ echo \"======================================"
     if [ "$DRY_RUN" = "1" ]; then
         echo "  [DRY RUN] ${LABEL}"
         echo "    Train: ${TRAIN_EMB}"
-        echo "    Val:   ${VAL_EMB}"
+        echo "    Val:   ${VAL_EMB} (${VAL_STATUS})"
         echo ""
     else
         # Create logs directory
@@ -189,9 +218,7 @@ echo \"======================================"
 
         # Submit
         JOB_ID=$(echo "$JOB_SCRIPT" | sbatch | awk '{print $NF}')
-        echo "  Submitted ${JOB_ID} — ${LABEL}"
-        echo "    Train: ${TRAIN_EMB}"
-        echo "    Val:   ${VAL_EMB}"
+        echo "  Submitted ${JOB_ID} — ${LABEL} (val: ${VAL_STATUS})"
         N_SUBMITTED=$((N_SUBMITTED + 1))
     fi
 done

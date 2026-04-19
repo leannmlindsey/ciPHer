@@ -157,38 +157,31 @@ def embedding_filename(embedding_type):
     return f'{embedding_type}_md5.npz'
 
 
-def load_validation_data(data_dir, embedding_type, val_embedding_file=None):
+def load_validation_data(val_fasta, val_embedding_file, val_datasets_dir):
     """Load all shared validation data.
 
     Args:
-        data_dir: path to data/ directory
-        embedding_type: e.g., 'esm2_650m'
-        val_embedding_file: optional absolute path to validation embedding NPZ.
-            If provided, overrides the default path derived from embedding_type.
+        val_fasta: path to validation FASTA (for pid->md5 mapping)
+        val_embedding_file: path to validation embedding NPZ
+        val_datasets_dir: path to directory containing dataset subdirs
+            (e.g., .../HOST_RANGE/ with CHEN/, PBIP/, etc.)
 
     Returns:
         dict with 'emb_dict', 'pid_md5', 'hr_dir', 'available_datasets'
     """
-    val_dir = os.path.join(data_dir, 'validation_data')
-    hr_dir = os.path.join(val_dir, 'HOST_RANGE')
-
     # Protein ID -> MD5 mapping
-    fasta_path = os.path.join(val_dir, 'metadata', 'validation_rbps_all.faa')
-    pid_md5 = load_fasta_md5(fasta_path)
+    if not os.path.exists(val_fasta):
+        raise FileNotFoundError(f'Validation FASTA not found: {val_fasta}')
+    pid_md5 = load_fasta_md5(val_fasta)
 
     # Embeddings
-    if val_embedding_file:
-        emb_path = val_embedding_file
-    else:
-        emb_file = embedding_filename(embedding_type)
-        emb_path = os.path.join(val_dir, 'embeddings', emb_file)
-    if not os.path.exists(emb_path):
+    if not os.path.exists(val_embedding_file):
         raise FileNotFoundError(
-            f'Embedding file not found: {emb_path}\n'
-            f'Model requires {embedding_type!r} embeddings.')
-    emb_dict = load_embeddings(emb_path)
+            f'Validation embedding file not found: {val_embedding_file}')
+    emb_dict = load_embeddings(val_embedding_file)
 
     # Available datasets
+    hr_dir = val_datasets_dir
     available = [d for d in DATASETS if os.path.isdir(os.path.join(hr_dir, d))]
 
     return {
@@ -302,8 +295,18 @@ def main():
         'run_dir',
         help='Path to the run directory (must have predict.py in or above it)')
     parser.add_argument(
-        '--data-dir',
-        help='Path to data/ directory (default: auto-detect)')
+        '--val-fasta',
+        help='Path to validation protein FASTA (for pid->md5 mapping). '
+             'Overrides config.yaml validation.val_fasta')
+    parser.add_argument(
+        '--val-embedding-file',
+        help='Path to validation embedding NPZ file. '
+             'Overrides config.yaml validation.val_embedding_file')
+    parser.add_argument(
+        '--val-datasets-dir',
+        help='Path to directory containing validation dataset subdirs '
+             '(CHEN/, PBIP/, PhageHostLearn/, etc.). '
+             'Overrides config.yaml validation.val_datasets_dir')
     parser.add_argument(
         '--datasets', nargs='+',
         help=f'Datasets to evaluate (default: all). Options: {", ".join(DATASETS)}')
@@ -324,10 +327,6 @@ def main():
              'for the K head having ~7x more classes than O. '
              '"raw" compares raw probabilities (legacy; biased toward O).')
     parser.add_argument(
-        '--val-embedding-file',
-        help='Path to validation embedding NPZ file. Overrides the default '
-             'path derived from embedding_type.')
-    parser.add_argument(
         '--output', '-o',
         help='Save results JSON to this path (default: {run_dir}/results/evaluation.json)')
     parser.add_argument(
@@ -341,19 +340,47 @@ def main():
     if verbose:
         print(f'Loading predictor from {run_dir}')
     predictor = load_predictor(run_dir)
-    # Apply score normalization choice
     predictor.score_normalization = args.score_norm
 
     if verbose:
         print(f'  Embedding type: {predictor.embedding_type}')
 
-    data_dir = resolve_data_dir(args.data_dir, run_dir)
+    # Resolve validation paths: CLI args > config.yaml > defaults
+    import yaml
+    config_path = os.path.join(run_dir, 'config.yaml')
+    val_cfg = {}
+    if os.path.exists(config_path):
+        with open(config_path) as f:
+            full_cfg = yaml.safe_load(f) or {}
+        val_cfg = full_cfg.get('validation', {})
+
+    # Find project root for resolving relative paths
+    project_root = find_project_root(run_dir) or os.getcwd()
+
+    def resolve_path(cli_val, config_key, default):
+        """Pick CLI > config > default, and resolve relative paths."""
+        val = cli_val or val_cfg.get(config_key, default)
+        if val and not os.path.isabs(val):
+            val = os.path.join(project_root, val)
+        return val
+
+    val_fasta = resolve_path(
+        args.val_fasta, 'val_fasta',
+        'data/validation_data/metadata/validation_rbps_all.faa')
+    val_embedding_file = resolve_path(
+        args.val_embedding_file, 'val_embedding_file',
+        'data/validation_data/embeddings/esm2_650m_md5.npz')
+    val_datasets_dir = resolve_path(
+        args.val_datasets_dir, 'val_datasets_dir',
+        'data/validation_data/HOST_RANGE')
 
     if verbose:
-        print(f'Loading validation data from {data_dir}')
-    val_data = load_validation_data(
-        data_dir, predictor.embedding_type,
-        val_embedding_file=args.val_embedding_file)
+        print(f'Validation paths:')
+        print(f'  FASTA:      {val_fasta}')
+        print(f'  Embeddings: {val_embedding_file}')
+        print(f'  Datasets:   {val_datasets_dir}')
+
+    val_data = load_validation_data(val_fasta, val_embedding_file, val_datasets_dir)
 
     if verbose:
         print(f'Evaluating on: {", ".join(args.datasets or val_data["available_datasets"])}')
