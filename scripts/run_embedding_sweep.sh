@@ -149,14 +149,15 @@ for entry in "${EMBEDDINGS[@]}"; do
 #SBATCH --cpus-per-task=${CPUS}
 #SBATCH --mem=${MEM}
 #SBATCH --time=${TIME}
-#SBATCH --output=${CIPHER_DIR}/logs/${NAME}_%j.out
-#SBATCH --error=${CIPHER_DIR}/logs/${NAME}_%j.err
+#SBATCH --output=${CIPHER_DIR}/logs/${NAME}_%j.log
+#SBATCH --error=${CIPHER_DIR}/logs/${NAME}_%j.log
 
 set -euo pipefail
 
 source \$(conda info --base)/etc/profile.d/conda.sh
 conda activate ${CONDA_ENV}
 cd ${CIPHER_DIR}
+export PYTHONPATH=${CIPHER_DIR}/src:\${PYTHONPATH:-}
 
 echo \"======================================\"
 echo \"Embedding sweep: ${LABEL}\"
