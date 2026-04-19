@@ -1,0 +1,39 @@
+# AttentionMLP default configuration
+# Override any of these via cipher-train CLI args
+
+model:
+  hidden_dims: [1280, 640, 320, 160]
+  attention_dim: 640
+  dropout: 0.1
+
+training:
+  batch_size: 64
+  learning_rate: 0.00001
+  epochs: 200
+  patience: 30
+  seed: 42
+  train_ratio: 0.7
+  val_ratio: 0.15
+
+data:
+  association_map: data/training_data/metadata/host_phage_protein_map.tsv
+  glycan_binders: data/training_data/metadata/glycan_binders_custom.tsv
+  embedding_type: esm2_650m
+  embedding_file: data/training_data/embeddings/esm2_650m_md5.npz
+
+experiment:
+  # Tool filter: which proteins to include based on tool flags.
+  # - tools:         keep proteins flagged by ANY of these tools (default: all 8)
+  # - exclude_tools: drop proteins flagged by ANY of these tools (default: none)
+  # Valid tool names: DePP_85, PhageRBPdetect, DepoScope, DepoRanker,
+  #                   SpikeHunter, dbCAN, IPR, phold_glycan_tailspike
+  # Examples:
+  #   tools: [SpikeHunter]              # equivalent to old protein_set: tsp_only
+  #   exclude_tools: [SpikeHunter]      # equivalent to old protein_set: rbp_only
+  tools: null
+  exclude_tools: null
+  min_sources: 3
+  max_k_types: 3
+  max_o_types: 3
+  single_label: true
+  label_strategy: single_label

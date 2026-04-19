@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Data files (too large for git)
+/data/
+
+# Experiment results (per-run, not tracked globally)
+experiments/
+
+# Data exploration output (generated, not tracked)
+data_exploration/output/
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store

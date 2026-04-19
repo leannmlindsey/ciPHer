@@ -1,0 +1,13 @@
+host_assembly	host_K	host_O	phage_id	protein_id	is_tsp	protein_md5
+GCA_001	K1	O1	phage_A	prot_1	1	md5_aaa
+GCA_001	K1	O1	phage_A	prot_2	0	md5_bbb
+GCA_002	K2	O1	phage_B	prot_1	1	md5_aaa
+GCA_002	K2	O1	phage_B	prot_3	1	md5_ccc
+GCA_003	K1	O2	phage_C	prot_1	1	md5_aaa
+GCA_003	K1	O2	phage_C	prot_4	0	md5_ddd
+GCA_004	K3	O1	phage_D	prot_5	0	md5_eee
+GCA_004	K3	O1	phage_D	prot_6	1	md5_fff
+GCA_005	K1	O1	phage_E	prot_7	0	md5_ggg
+GCA_006	K2	O2	phage_F	prot_8	1	md5_hhh
+GCA_007	K1	O1	phage_G	prot_9	0	md5_iii
+GCA_008	K4	O3	phage_H	prot_10	1	md5_jjj

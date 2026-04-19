@@ -1,0 +1,11 @@
+protein_id	DePP_85	PhageRBPdetect	DepoScope	DepoRanker	SpikeHunter	dbCAN	IPR	phold_glycan_tailspike	total_sources	is_negative
+prot_1	1	1	1	0	1	0	0	0	4	0
+prot_2	1	1	0	0	0	0	0	0	2	0
+prot_3	1	1	1	0	1	0	0	0	4	0
+prot_4	1	0	0	0	0	0	0	0	1	0
+prot_5	1	1	1	0	0	0	0	0	3	0
+prot_6	1	1	1	0	1	0	0	0	4	0
+prot_7	1	1	1	0	0	0	0	0	3	0
+prot_8	1	1	1	0	1	1	0	0	5	0
+prot_9	1	0	1	0	0	0	0	0	2	0
+prot_10	1	1	1	1	1	1	0	0	6	0
