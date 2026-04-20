@@ -231,6 +231,7 @@ def train_head(head_name, embs_train, y_train, embs_val, y_val,
         'dropout': classifier_dropout,
         'la_kernel_size': kernel_size,
         'la_conv_dropout': conv_dropout,
+        'n_segments': config.get('data', {}).get('n_segments'),
         'lr': lr,
         'weight_decay': 0.01,
         'epochs': epochs,
@@ -354,13 +355,33 @@ def train(experiment_dir, config):
     md5_set = set(td.md5_list)
     emb_dict = load_embeddings(emb_file, md5_filter=md5_set)
     print(f'  Loaded {len(emb_dict)} embeddings')
+
+    # Segmented embeddings (seg4, seg8, ...) are stored flattened as
+    # (n_segments * D,) so they drop into mean-pooled pipelines unchanged.
+    # LA needs the segment structure, so reshape (N*D,) -> (N, D) here.
+    n_segments = data_cfg.get('n_segments')
+    if n_segments and emb_dict:
+        sample = next(iter(emb_dict.values()))
+        if sample.ndim == 1:
+            if sample.size % n_segments != 0:
+                raise RuntimeError(
+                    f'Embedding size {sample.size} not divisible by '
+                    f'n_segments={n_segments}.')
+            D = sample.size // n_segments
+            print(f'  Reshaping ({sample.size},) -> ({n_segments}, {D})')
+            emb_dict = {
+                k: v.reshape(n_segments, D) if v.ndim == 1 else v
+                for k, v in emb_dict.items()
+            }
+
     if emb_dict:
         sample = next(iter(emb_dict.values()))
         print(f'  Sample shape: {sample.shape} (per-residue/segmented OK)')
         if sample.ndim != 2:
             raise RuntimeError(
                 f'Embeddings must be 2D (L, D); got shape {sample.shape}. '
-                f'Light Attention cannot use mean-pooled vectors.')
+                f'Light Attention cannot use mean-pooled vectors. '
+                f'If they are segmented/flattened, set data.n_segments in the config.')
 
     md5_to_idx = md5_to_idx_full
 

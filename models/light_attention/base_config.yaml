@@ -29,6 +29,11 @@ data:
   glycan_binders: data/training_data/metadata/glycan_binders_custom.tsv
   embedding_type: esm2_650m_seg4
   embedding_file: data/training_data/embeddings/esm2_650m_seg4_md5.npz
+  # Segmented embeddings are stored flattened as (n_segments * D,) so they
+  # drop into the attention_mlp baseline as a bigger feature vector. LA needs
+  # the segment structure preserved, so we reshape (N*D,) -> (N, D) at load.
+  # Set to null for per-residue files that are already 2D.
+  n_segments: 4
 
 validation:
   val_fasta: data/validation_data/metadata/validation_rbps_all.faa

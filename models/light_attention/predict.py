@@ -20,7 +20,8 @@ class LightAttentionPredictor(Predictor):
     """Predictor for trained Light Attention K and O heads."""
 
     def __init__(self, k_model, o_model, k_classes, o_classes,
-                 k_strategy, o_strategy, embedding_type_name, device):
+                 k_strategy, o_strategy, embedding_type_name, device,
+                 n_segments=None, embedding_dim=None):
         self._k_model = k_model
         self._o_model = o_model
         self._k_classes = k_classes
@@ -29,6 +30,10 @@ class LightAttentionPredictor(Predictor):
         self._o_strategy = o_strategy
         self._embedding_type = embedding_type_name
         self._device = device
+        # For flattened segmented embeddings (e.g. seg4 stored as (N*D,)),
+        # reshape to (N, D) at inference time to match training layout.
+        self._n_segments = n_segments
+        self._embedding_dim = embedding_dim
 
     @property
     def embedding_type(self):
@@ -44,10 +49,20 @@ class LightAttentionPredictor(Predictor):
 
     def predict_protein(self, embedding):
         """Run LA pooling + classifier on a single (L, D) embedding."""
+        # Accept a flattened (N*D,) segmented embedding and reshape on the fly
+        # if the head was trained with n_segments set.
+        if embedding.ndim == 1 and self._n_segments and self._embedding_dim:
+            if embedding.size != self._n_segments * self._embedding_dim:
+                raise ValueError(
+                    f'Flattened embedding size {embedding.size} does not '
+                    f'match n_segments * embedding_dim = '
+                    f'{self._n_segments} * {self._embedding_dim}.')
+            embedding = embedding.reshape(self._n_segments, self._embedding_dim)
         if embedding.ndim != 2:
             raise ValueError(
                 f'Light Attention expects a 2D (L, D) embedding; '
-                f'got shape {embedding.shape}.')
+                f'got shape {embedding.shape}. For flattened segmented '
+                f'embeddings, ensure n_segments was set at training time.')
 
         emb_tensor = torch.as_tensor(embedding, dtype=torch.float32, device=self._device)
         # Build (1, D, L) input and an all-ones mask — single proteins have no
@@ -131,4 +146,6 @@ def get_predictor(experiment_dir):
         o_strategy=o_config.get('strategy', 'single_label'),
         embedding_type_name=embedding_type,
         device=device,
+        n_segments=k_config.get('n_segments'),
+        embedding_dim=k_config.get('embedding_dim'),
     )
