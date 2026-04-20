@@ -167,7 +167,22 @@ cipher-train --model attention_mlp --exclude_tools SpikeHunter
 cipher-train --model attention_mlp \
     --embedding_file /path/to/kmer_murphy8_k5.npz \
     --embedding_type kmer_murphy8_k5
+
+# Combined features: pLM + k-mer concatenated per MD5
+cipher-train --model attention_mlp \
+    --embedding_type esm2_3b_mean \
+    --embedding_file /path/to/esm2_3b.npz \
+    --embedding_type_2 kmer_aa20_k4 \
+    --embedding_file_2 /path/to/kmer_aa20_k4.npz \
+    --val_embedding_file /path/to/val_esm2_3b.npz \
+    --val_embedding_file_2 /path/to/val_kmer_aa20_k4.npz
 ```
+
+With `--embedding_file_2` set, features for each MD5 become
+`concatenate([pLM_vec, kmer_vec])`. Every MD5 must be present in both
+files — a coverage mismatch raises an error. Evaluation via
+`cipher-evaluate` automatically picks up the second file from the saved
+`config.yaml`, or accept `--val-embedding-file-2` explicitly.
 
 Valid tool names: `DePP_85`, `PhageRBPdetect`, `DepoScope`, `DepoRanker`,
 `SpikeHunter`, `dbCAN`, `IPR`, `phold_glycan_tailspike`.
@@ -314,6 +329,22 @@ USE_CLUSTERS=1 bash scripts/run_embedding_sweep.sh
 
 # Both together — 4 variants per embedding possible
 FILTER_MODE=positive_list USE_CLUSTERS=1 bash scripts/run_embedding_sweep.sh
+```
+
+### Concat Sweep (pLM + k-mer)
+
+`scripts/run_concat_sweep.sh` iterates over `(pLM, k-mer)` embedding
+pairs, training on the per-MD5 concatenation. Pairs are configured in
+the `EMBEDDING_PAIRS` array at the top of the script — edit them to
+match the winners of the single-embedding sweeps. The same
+`FILTER_MODE` and `USE_CLUSTERS` env vars apply. Run names use the
+`concat_<plm>+<kmer>` (+`posList_`, +`_cl70`) convention.
+
+```bash
+DRY_RUN=1 bash scripts/run_concat_sweep.sh
+bash scripts/run_concat_sweep.sh                               # all pairs
+bash scripts/run_concat_sweep.sh esm2_3b_mean+kmer_aa20_k4     # single pair
+FILTER_MODE=positive_list USE_CLUSTERS=1 bash scripts/run_concat_sweep.sh
 ```
 
 ### Persistent results log + figures

@@ -1,6 +1,6 @@
 """Data loading and preparation utilities."""
 
-from cipher.data.embeddings import load_embeddings
+from cipher.data.embeddings import load_embeddings, load_embeddings_concat
 from cipher.data.proteins import load_fasta, compute_md5, load_glycan_binders
 from cipher.data.serotypes import load_serotypes
 from cipher.data.interactions import load_interaction_matrix, load_phage_protein_mapping
@@ -9,6 +9,7 @@ from cipher.data.training import TrainingConfig, TrainingData, prepare_training_
 
 __all__ = [
     'load_embeddings',
+    'load_embeddings_concat',
     'load_fasta',
     'compute_md5',
     'load_glycan_binders',

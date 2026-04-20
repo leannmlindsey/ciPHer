@@ -117,6 +117,12 @@ def apply_overrides(config, args):
         config.setdefault('data', {})['embedding_type'] = args.embedding_type
     if args.embedding_file is not None:
         config.setdefault('data', {})['embedding_file'] = args.embedding_file
+    if args.embedding_type_2 is not None:
+        config.setdefault('data', {})['embedding_type_2'] = args.embedding_type_2
+    if args.embedding_file_2 is not None:
+        config.setdefault('data', {})['embedding_file_2'] = args.embedding_file_2
+    if args.val_embedding_file_2 is not None:
+        config.setdefault('validation', {})['val_embedding_file_2'] = args.val_embedding_file_2
 
     # Data path overrides
     if args.association_map is not None:
@@ -422,6 +428,19 @@ Examples:
                         help=f'Path to training embedding NPZ file. Overrides the '
                              f'default path derived from embedding_type. '
                              f'(default: {fmt(d_data.get("embedding_file"))})')
+    parser.add_argument('--embedding_type_2',
+                        help='Optional second embedding type label (e.g. '
+                             'kmer_aa20_k4). When set along with '
+                             '--embedding_file_2, features become the '
+                             'concatenation of the two embeddings per MD5.')
+    parser.add_argument('--embedding_file_2',
+                        help='Path to a second training embedding NPZ to '
+                             'concatenate with --embedding_file (pLM+kmer '
+                             'combo experiments).')
+    parser.add_argument('--val_embedding_file_2',
+                        help='Path to the matching second validation embedding '
+                             'NPZ. Required if --embedding_file_2 is set and '
+                             'evaluation will be run from the saved config.')
     parser.add_argument('--association_map',
                         help=f'Path to host_phage_protein_map.tsv '
                              f'(default: {fmt(d_data.get("association_map"))})')

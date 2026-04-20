@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 
 from cipher.data.training import TrainingConfig, prepare_training_data
 from cipher.data.splits import create_stratified_split
-from cipher.data.embeddings import load_embeddings
+from cipher.data.embeddings import load_embeddings, load_embeddings_concat
 
 from model import AttentionMLP, SerotypeDataset, get_loss_fn, compute_metrics
 
@@ -366,8 +366,13 @@ def train(experiment_dir, config):
     print('\nStep 3: Loading embeddings...')
     emb_file = data_cfg.get('embedding_file',
                             'data/training_data/embeddings/esm2_650m_md5.npz')
+    emb_file_2 = data_cfg.get('embedding_file_2')
     md5_set = set(td.md5_list)
-    emb_dict = load_embeddings(emb_file, md5_filter=md5_set)
+    if emb_file_2:
+        emb_dict = load_embeddings_concat(emb_file, emb_file_2,
+                                          md5_filter=md5_set)
+    else:
+        emb_dict = load_embeddings(emb_file, md5_filter=md5_set)
     print(f'  Loaded {len(emb_dict)} embeddings')
 
     # Step 4: Build arrays

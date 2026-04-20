@@ -17,7 +17,7 @@ import os
 import sys
 import time
 
-from cipher.data.embeddings import load_embeddings
+from cipher.data.embeddings import load_embeddings, load_embeddings_concat
 from cipher.data.proteins import load_fasta_md5
 from cipher.evaluation.ranking import evaluate_rankings
 
@@ -157,7 +157,8 @@ def embedding_filename(embedding_type):
     return f'{embedding_type}_md5.npz'
 
 
-def load_validation_data(val_fasta, val_embedding_file, val_datasets_dir):
+def load_validation_data(val_fasta, val_embedding_file, val_datasets_dir,
+                         val_embedding_file_2=None):
     """Load all shared validation data.
 
     Args:
@@ -165,6 +166,9 @@ def load_validation_data(val_fasta, val_embedding_file, val_datasets_dir):
         val_embedding_file: path to validation embedding NPZ
         val_datasets_dir: path to directory containing dataset subdirs
             (e.g., .../HOST_RANGE/ with CHEN/, PBIP/, etc.)
+        val_embedding_file_2: optional path to a second validation embedding
+            NPZ. When set, features are concatenated per MD5 to match a
+            combined-feature training run.
 
     Returns:
         dict with 'emb_dict', 'pid_md5', 'hr_dir', 'available_datasets'
@@ -174,11 +178,20 @@ def load_validation_data(val_fasta, val_embedding_file, val_datasets_dir):
         raise FileNotFoundError(f'Validation FASTA not found: {val_fasta}')
     pid_md5 = load_fasta_md5(val_fasta)
 
-    # Embeddings
+    # Embeddings — optionally concatenated from two NPZs
     if not os.path.exists(val_embedding_file):
         raise FileNotFoundError(
             f'Validation embedding file not found: {val_embedding_file}')
-    emb_dict = load_embeddings(val_embedding_file)
+    if val_embedding_file_2:
+        if not os.path.exists(val_embedding_file_2):
+            raise FileNotFoundError(
+                f'Second validation embedding file not found: '
+                f'{val_embedding_file_2}')
+        needed = set(pid_md5.values())
+        emb_dict = load_embeddings_concat(
+            val_embedding_file, val_embedding_file_2, md5_filter=needed)
+    else:
+        emb_dict = load_embeddings(val_embedding_file)
 
     # Available datasets
     hr_dir = val_datasets_dir
@@ -303,6 +316,11 @@ def main():
         help='Path to validation embedding NPZ file. '
              'Overrides config.yaml validation.val_embedding_file')
     parser.add_argument(
+        '--val-embedding-file-2',
+        help='Optional path to a second validation embedding NPZ to '
+             'concatenate with --val-embedding-file. Must match the '
+             'combined-feature setup used at training time.')
+    parser.add_argument(
         '--val-datasets-dir',
         help='Path to directory containing validation dataset subdirs '
              '(CHEN/, PBIP/, PhageHostLearn/, etc.). '
@@ -370,6 +388,8 @@ def main():
     val_embedding_file = resolve_path(
         args.val_embedding_file, 'val_embedding_file',
         'data/validation_data/embeddings/esm2_650m_md5.npz')
+    val_embedding_file_2 = resolve_path(
+        args.val_embedding_file_2, 'val_embedding_file_2', None)
     val_datasets_dir = resolve_path(
         args.val_datasets_dir, 'val_datasets_dir',
         'data/validation_data/HOST_RANGE')
@@ -378,9 +398,12 @@ def main():
         print(f'Validation paths:')
         print(f'  FASTA:      {val_fasta}')
         print(f'  Embeddings: {val_embedding_file}')
+        if val_embedding_file_2:
+            print(f'  + second:   {val_embedding_file_2}')
         print(f'  Datasets:   {val_datasets_dir}')
 
-    val_data = load_validation_data(val_fasta, val_embedding_file, val_datasets_dir)
+    val_data = load_validation_data(val_fasta, val_embedding_file, val_datasets_dir,
+                                    val_embedding_file_2=val_embedding_file_2)
 
     if verbose:
         print(f'Evaluating on: {", ".join(args.datasets or val_data["available_datasets"])}')
