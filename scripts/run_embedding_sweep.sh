@@ -31,11 +31,10 @@ GLYCAN_BINDERS="${CIPHER_DIR}/data/training_data/metadata/glycan_binders_custom.
 VAL_FASTA="/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/validation_data/metadata/validation_rbps_all.faa"
 VAL_DATASETS_DIR="/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/validation_data/HOST_RANGE"
 
-# SLURM resources
+# SLURM resources (per-embedding MEM is set in the EMBEDDINGS array below)
 GPUS=1
 CPUS=8
-TIME="24:00:00"
-MEM=0   # 0 = all available
+TIME="12:00:00"
 
 # ============================================================
 # Fixed model configuration (held constant across sweep)
@@ -54,7 +53,8 @@ MIN_SOURCES=1
 
 # ============================================================
 # Embedding configurations
-# Format: "label  train_embedding_file  val_embedding_file"
+# Format: "label  train_embedding_file  val_embedding_file  mem"
+# Set mem per-entry so small jobs don't block on full-node reservations.
 # ============================================================
 TRAIN_EMB_ROOT="/projects/bfzj/llindsey1/RBP_Structural_Similarity/output"
 KMER_ROOT="/work/hdd/bfzj/llindsey1/kmer_features"
@@ -62,18 +62,18 @@ VAL_EMB_ROOT="/projects/bfzj/llindsey1/PHI_TSP/phi_tsp/klebsiella/validation_dat
 
 EMBEDDINGS=(
     # PLM embeddings
-    "esm2_650m_mean     ${TRAIN_EMB_ROOT}/embeddings_binned/candidates_embeddings_md5.npz                   ${VAL_EMB_ROOT}/validation_embeddings_md5.npz"
-    "esm2_650m_seg4     /work/hdd/bfzj/llindsey1/embeddings_segments4/candidates_embeddings_segments4_md5.npz  /work/hdd/bfzj/llindsey1/validation_embeddings_segments4/validation_embeddings_segments4_md5.npz"
-    "esm2_3b_mean       ${TRAIN_EMB_ROOT}/embeddings_esm2_3b/candidates_embeddings_md5.npz                  /work/hdd/bfzj/llindsey1/validation_embeddings_esm2_3b/validation_embeddings_md5.npz"
-    "esm2_150m_mean     ${TRAIN_EMB_ROOT}/embeddings_esm2_150m/candidates_embeddings_md5.npz                /work/hdd/bfzj/llindsey1/validation_embeddings_esm2_150m/validation_embeddings_md5.npz"
-    "prott5_mean        ${TRAIN_EMB_ROOT}/embeddings_prott5/candidates_embeddings_md5.npz                   /work/hdd/bfzj/llindsey1/validation_embeddings_prott5/validation_embeddings_md5.npz"
+    "esm2_650m_mean     ${TRAIN_EMB_ROOT}/embeddings_binned/candidates_embeddings_md5.npz                                   ${VAL_EMB_ROOT}/validation_embeddings_md5.npz                                                    64G"
+    "esm2_650m_seg4     /work/hdd/bfzj/llindsey1/embeddings_segments4/candidates_embeddings_segments4_md5.npz               /work/hdd/bfzj/llindsey1/validation_embeddings_segments4/validation_embeddings_segments4_md5.npz  64G"
+    "esm2_3b_mean       ${TRAIN_EMB_ROOT}/embeddings_esm2_3b/candidates_embeddings_md5.npz                                  /work/hdd/bfzj/llindsey1/validation_embeddings_esm2_3b/validation_embeddings_md5.npz            128G"
+    "esm2_150m_mean     ${TRAIN_EMB_ROOT}/embeddings_esm2_150m/candidates_embeddings_md5.npz                                /work/hdd/bfzj/llindsey1/validation_embeddings_esm2_150m/validation_embeddings_md5.npz           64G"
+    "prott5_mean        ${TRAIN_EMB_ROOT}/embeddings_prott5/candidates_embeddings_md5.npz                                   /work/hdd/bfzj/llindsey1/validation_embeddings_prott5/validation_embeddings_md5.npz              64G"
 
     # K-mer features (best separation results only)
-    "kmer_murphy8_k5    ${KMER_ROOT}/candidates_murphy8_k5.npz      ${KMER_ROOT}/validation_murphy8_k5.npz"
-    "kmer_murphy10_k5   ${KMER_ROOT}/candidates_murphy10_k5.npz     ${KMER_ROOT}/validation_murphy10_k5.npz"
-    "kmer_li10_k5       ${KMER_ROOT}/candidates_li10_k5.npz         ${KMER_ROOT}/validation_li10_k5.npz"
-    "kmer_aa20_k3       ${KMER_ROOT}/candidates_aa20_k3.npz         ${KMER_ROOT}/validation_aa20_k3.npz"
-    "kmer_aa20_k4       ${KMER_ROOT}/candidates_aa20_k4.npz         ${KMER_ROOT}/validation_aa20_k4.npz"
+    "kmer_murphy8_k5    ${KMER_ROOT}/candidates_murphy8_k5.npz      ${KMER_ROOT}/validation_murphy8_k5.npz   64G"
+    "kmer_murphy10_k5   ${KMER_ROOT}/candidates_murphy10_k5.npz     ${KMER_ROOT}/validation_murphy10_k5.npz  64G"
+    "kmer_li10_k5       ${KMER_ROOT}/candidates_li10_k5.npz         ${KMER_ROOT}/validation_li10_k5.npz      64G"
+    "kmer_aa20_k3       ${KMER_ROOT}/candidates_aa20_k3.npz         ${KMER_ROOT}/validation_aa20_k3.npz      64G"
+    "kmer_aa20_k4       ${KMER_ROOT}/candidates_aa20_k4.npz         ${KMER_ROOT}/validation_aa20_k4.npz      64G"
 )
 
 # ============================================================
@@ -95,7 +95,7 @@ N_SUBMITTED=0
 N_SKIPPED=0
 
 for entry in "${EMBEDDINGS[@]}"; do
-    read -r LABEL TRAIN_EMB VAL_EMB <<< "$entry"
+    read -r LABEL TRAIN_EMB VAL_EMB MEM <<< "$entry"
 
     # Filter to single embedding if requested
     if [ -n "$FILTER" ] && [ "$LABEL" != "$FILTER" ]; then
@@ -205,7 +205,7 @@ echo \"  Finished: \$(date)\"
 echo \"======================================"
 
     if [ "$DRY_RUN" = "1" ]; then
-        echo "  [DRY RUN] ${LABEL}"
+        echo "  [DRY RUN] ${LABEL}  (mem=${MEM}, time=${TIME})"
         echo "    Train: ${TRAIN_EMB}"
         echo "    Val:   ${VAL_EMB} (${VAL_STATUS})"
         echo ""
