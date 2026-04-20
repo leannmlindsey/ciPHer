@@ -27,17 +27,22 @@ CONDA_ENV="${CONDA_ENV:-esmfold2}"
 
 # Auto-detect CIPHER_DIR from the script's own location (repo root = dir
 # containing this scripts/ folder). Override with CIPHER_DIR=... to point
-# elsewhere.
+# elsewhere. CIPHER_DIR is where code + experiments + logs live.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CIPHER_DIR="${CIPHER_DIR:-$(dirname "$SCRIPT_DIR")}"
 
+# DATA_DIR is the canonical data home on Delta — shared across all worktrees
+# / clones so we don't duplicate 10s of GB of TSVs + validation data.
+# Override with DATA_DIR=... if the data lives elsewhere.
+DATA_DIR="${DATA_DIR:-/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data}"
+
 # ============================================================
-# Data paths on Delta (no symlinks needed)
+# Data paths (resolved from DATA_DIR, not CIPHER_DIR)
 # ============================================================
-ASSOC_MAP="${CIPHER_DIR}/data/training_data/metadata/host_phage_protein_map.tsv"
-GLYCAN_BINDERS="${CIPHER_DIR}/data/training_data/metadata/glycan_binders_custom.tsv"
-VAL_FASTA="${CIPHER_DIR}/data/validation_data/metadata/validation_rbps_all.faa"
-VAL_DATASETS_DIR="${CIPHER_DIR}/data/validation_data/HOST_RANGE"
+ASSOC_MAP="${DATA_DIR}/training_data/metadata/host_phage_protein_map.tsv"
+GLYCAN_BINDERS="${DATA_DIR}/training_data/metadata/glycan_binders_custom.tsv"
+VAL_FASTA="${DATA_DIR}/validation_data/metadata/validation_rbps_all.faa"
+VAL_DATASETS_DIR="${DATA_DIR}/validation_data/HOST_RANGE"
 
 # Segments-4 embeddings (from run_embedding_sweep.sh)
 SEG4_TRAIN_EMB="/work/hdd/bfzj/llindsey1/embeddings_segments4/candidates_embeddings_segments4_md5.npz"
