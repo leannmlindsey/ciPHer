@@ -64,6 +64,16 @@ class TrainingConfig:
     tools: list = None          # None/empty = no tool filter (keep all glycan binders)
     exclude_tools: list = None  # None/empty = no exclusion
     protein_set: str = None     # DEPRECATED: use tools/exclude_tools
+    # If set, intersect candidate proteins with IDs in this file and skip
+    # the tool filter entirely. Mutually exclusive with tools/exclude_tools.
+    positive_list_path: str = None
+    # Optional cluster-stratified downsampling. cluster_file_path points at
+    # a multi-threshold TSV (protein_id + cl30_/cl40_/.../cl95_ columns);
+    # cluster_threshold picks which identity column to use. When set, the
+    # max_samples_per_k/o caps are filled by round-robin across clusters
+    # instead of random sampling, maximizing sequence diversity per class.
+    cluster_file_path: str = None
+    cluster_threshold: int = 70
     min_sources: int = 1
     max_k_types: int = None
     max_o_types: int = None
@@ -107,6 +117,12 @@ class TrainingConfig:
         # Validate tool names
         self.tools = _validate_tools(self.tools, 'tools')
         self.exclude_tools = _validate_tools(self.exclude_tools, 'exclude_tools')
+
+        # Enforce mutual exclusion: positive_list_path vs tool-based filters
+        if self.positive_list_path and (self.tools or self.exclude_tools):
+            raise ValueError(
+                'positive_list_path is mutually exclusive with tools/'
+                'exclude_tools. Use one or the other, not both.')
 
     @classmethod
     def from_dict(cls, d):
@@ -239,8 +255,15 @@ def prepare_training_data(config, association_map_path, glycan_binders_path,
     all_protein_ids = {r['protein_id'] for r in rows}
     log(f'  {len(all_protein_ids)} unique proteins in association table')
 
-    # Step 3: Filter proteins
-    filtered_ids = _filter_proteins(all_protein_ids, glycan_dict, config, log)
+    # Step 3: Filter proteins (by positive_list_path OR by tools, not both)
+    positive_set = None
+    if config.positive_list_path:
+        from cipher.data.proteins import load_positive_list
+        positive_set = load_positive_list(config.positive_list_path)
+        log(f'Loaded positive list: {len(positive_set)} IDs from '
+            f'{config.positive_list_path}')
+    filtered_ids = _filter_proteins(all_protein_ids, glycan_dict, config, log,
+                                    positive_set=positive_set)
 
     # Step 4: Build per-MD5 serotype associations
     md5_k_counts, md5_o_counts, md5_is_tsp = _build_md5_associations(
@@ -256,7 +279,12 @@ def prepare_training_data(config, association_map_path, glycan_binders_path,
 
     # Step 7: Downsampling
     if config.max_samples_per_k or config.max_samples_per_o:
-        _downsample(md5_k_counts, md5_o_counts, md5_is_tsp, config, log)
+        cluster_map = None
+        if config.cluster_file_path:
+            cluster_map = _build_md5_cluster_map(
+                config.cluster_file_path, config.cluster_threshold, rows, log)
+        _downsample(md5_k_counts, md5_o_counts, md5_is_tsp, config, log,
+                    cluster_map=cluster_map)
     else:
         log('  Downsampling: disabled (no max_samples_per_k/o set)')
 
@@ -357,41 +385,48 @@ def prepare_training_data(config, association_map_path, glycan_binders_path,
 # Internal helpers
 # ============================================================
 
-def _filter_proteins(all_protein_ids, glycan_dict, config, log):
-    """Filter proteins by tools/exclude_tools and min_sources.
+def _filter_proteins(all_protein_ids, glycan_dict, config, log, positive_set=None):
+    """Filter proteins by positive_list OR by tools (mutually exclusive) and min_sources.
 
     Filter logic:
         1. Keep only proteins present in glycan_dict
-        2. min_sources: keep if total_sources >= min_sources
-        3. tools: if set and non-empty, keep only proteins flagged (==1) by
-           AT LEAST ONE of the listed tools
-        4. exclude_tools: if set and non-empty, drop proteins flagged by
-           ANY of the listed tools
+        2. min_sources: keep if total_sources >= min_sources (applies either branch)
+        3. If positive_set is given: keep only proteins in that set, and skip
+           the tool filter entirely.
+        4. Else, use tool-based filtering:
+           - tools: if set, keep proteins flagged by AT LEAST ONE listed tool
+           - exclude_tools: if set, drop proteins flagged by ANY listed tool
     """
     min_sources = config.min_sources
-    tools = config.tools
-    exclude_tools = config.exclude_tools
 
     # Start with proteins that have glycan binder data
     filtered = {pid for pid in all_protein_ids if pid in glycan_dict}
     if len(filtered) < len(all_protein_ids):
         log(f'  in glycan_binders: {len(all_protein_ids)} -> {len(filtered)}')
 
-    # Filter by min_sources
+    # Filter by min_sources (applies regardless of primary filter)
     if min_sources > 1:
         before = len(filtered)
         filtered = {pid for pid in filtered
                     if int(glycan_dict[pid].get('total_sources', 0)) >= min_sources}
         log(f'  min_sources >= {min_sources}: {before} -> {len(filtered)}')
 
-    # Filter by tools (keep proteins flagged by at least one listed tool)
+    # Primary filter: positive_list OR tools (mutex enforced by TrainingConfig)
+    if positive_set is not None:
+        before = len(filtered)
+        filtered = {pid for pid in filtered if pid in positive_set}
+        log(f'  positive_list filter: {before} -> {len(filtered)}')
+        return filtered
+
+    tools = config.tools
+    exclude_tools = config.exclude_tools
+
     if tools:
         before = len(filtered)
         filtered = {pid for pid in filtered
                     if any(int(glycan_dict[pid].get(t, 0)) == 1 for t in tools)}
         log(f'  tools={tools}: {before} -> {len(filtered)}')
 
-    # Filter by exclude_tools (drop proteins flagged by any listed tool)
     if exclude_tools:
         before = len(filtered)
         filtered = {pid for pid in filtered
@@ -482,16 +517,24 @@ def _apply_single_label(md5_k_counts, md5_o_counts, log):
         f'{n_reduced_o} multi-O -> single-O (kept all {len(md5_k_counts)} MD5s)')
 
 
-def _downsample(md5_k_counts, md5_o_counts, md5_is_tsp, config, log):
+def _downsample(md5_k_counts, md5_o_counts, md5_is_tsp, config, log,
+                cluster_map=None):
     """Cap per-class sample counts. K and O passes are independent.
 
     Each MD5 is assigned to its primary (most frequent) K-type and O-type.
-    If a class has more MD5s than the cap, a random subset is kept.
+    When a class exceeds the cap:
+      - if cluster_map is given, round-robin across clusters to max diversity
+      - otherwise, random uniform sample.
     Works for both single-label and multi-label strategies.
     """
     rng = np.random.default_rng(config.downsample_seed)
     keep = set(md5_k_counts.keys())
     before = len(keep)
+
+    def sample(md5s, cap):
+        if cluster_map is not None:
+            return _cluster_stratified_sample(md5s, cap, cluster_map, rng)
+        return rng.choice(md5s, size=cap, replace=False).tolist()
 
     if config.max_samples_per_k:
         # Assign each MD5 to its primary (most frequent) K-type
@@ -504,15 +547,16 @@ def _downsample(md5_k_counts, md5_o_counts, md5_is_tsp, config, log):
         n_capped = 0
         for primary_k, md5s in sorted(k_buckets.items()):
             if len(md5s) > config.max_samples_per_k:
-                chosen = rng.choice(md5s, size=config.max_samples_per_k, replace=False)
-                new_keep.update(chosen.tolist())
+                chosen = sample(md5s, config.max_samples_per_k)
+                new_keep.update(chosen)
                 log(f'    K downsample {primary_k}: {len(md5s)} -> {config.max_samples_per_k}')
                 n_capped += 1
             else:
                 new_keep.update(md5s)
         keep = new_keep
-        log(f'  Downsample K (max={config.max_samples_per_k}): {before} -> {len(keep)} '
-            f'({n_capped} classes capped)')
+        mode = 'cluster-stratified' if cluster_map is not None else 'random'
+        log(f'  Downsample K (max={config.max_samples_per_k}, {mode}): '
+            f'{before} -> {len(keep)} ({n_capped} classes capped)')
 
     if config.max_samples_per_o:
         before_o = len(keep)
@@ -528,15 +572,16 @@ def _downsample(md5_k_counts, md5_o_counts, md5_is_tsp, config, log):
         n_capped = 0
         for primary_o, md5s in sorted(o_buckets.items()):
             if len(md5s) > config.max_samples_per_o:
-                chosen = rng.choice(md5s, size=config.max_samples_per_o, replace=False)
-                new_keep.update(chosen.tolist())
+                chosen = sample(md5s, config.max_samples_per_o)
+                new_keep.update(chosen)
                 log(f'    O downsample {primary_o}: {len(md5s)} -> {config.max_samples_per_o}')
                 n_capped += 1
             else:
                 new_keep.update(md5s)
         keep = new_keep
-        log(f'  Downsample O (max={config.max_samples_per_o}): {before_o} -> {len(keep)} '
-            f'({n_capped} classes capped)')
+        mode = 'cluster-stratified' if cluster_map is not None else 'random'
+        log(f'  Downsample O (max={config.max_samples_per_o}, {mode}): '
+            f'{before_o} -> {len(keep)} ({n_capped} classes capped)')
 
     # Remove MD5s not in keep
     removed = 0
@@ -546,6 +591,76 @@ def _downsample(md5_k_counts, md5_o_counts, md5_is_tsp, config, log):
             removed += 1
 
     log(f'  After downsampling: {len(md5_k_counts)} MD5s (removed {removed})')
+
+
+def _cluster_stratified_sample(md5s, cap, cluster_map, rng):
+    """Round-robin sample up to `cap` MD5s, maximizing cluster diversity.
+
+    md5s without a cluster assignment are placed in singleton pseudo-clusters
+    (keyed by the md5 itself) so they still get sampled but don't collide
+    with one another.
+    """
+    clusters = defaultdict(list)
+    for md5 in md5s:
+        cid = cluster_map.get(md5) or f'_solo_{md5}'
+        clusters[cid].append(md5)
+
+    cluster_ids = list(clusters.keys())
+    rng.shuffle(cluster_ids)
+    for cid in cluster_ids:
+        rng.shuffle(clusters[cid])
+
+    selected = []
+    cursor = {cid: 0 for cid in cluster_ids}
+    while len(selected) < cap:
+        advanced = False
+        for cid in cluster_ids:
+            if len(selected) >= cap:
+                break
+            i = cursor[cid]
+            if i < len(clusters[cid]):
+                selected.append(clusters[cid][i])
+                cursor[cid] = i + 1
+                advanced = True
+        if not advanced:
+            break
+    return selected
+
+
+def _build_md5_cluster_map(cluster_path, threshold, rows, log):
+    """Build {md5: cluster_id} at the given identity threshold.
+
+    The cluster file has one row per protein_id with columns cl30_X, cl40_X,
+    ..., cl95_X (no header). We join via protein_id -> md5 from `rows`.
+    """
+    target_prefix = f'cl{threshold}_'
+    pid_to_md5 = {r['protein_id']: r.get('protein_md5')
+                  for r in rows if r.get('protein_md5')}
+
+    md5_to_cluster = {}
+    missing_col = 0
+    matched_pids = 0
+    with open(cluster_path) as f:
+        for line in f:
+            parts = line.rstrip('\n').split('\t')
+            if not parts:
+                continue
+            pid = parts[0]
+            md5 = pid_to_md5.get(pid)
+            if not md5:
+                continue
+            matched_pids += 1
+            cid = next((p for p in parts[1:] if p.startswith(target_prefix)), None)
+            if cid is None:
+                missing_col += 1
+                continue
+            md5_to_cluster[md5] = cid
+
+    log(f'  cluster map: {len(md5_to_cluster):,} MD5s assigned to '
+        f'cl{threshold} clusters (matched {matched_pids:,} protein_ids)')
+    if missing_col:
+        log(f'  WARNING: {missing_col} rows lacked a cl{threshold}_ column')
+    return md5_to_cluster
 
 
 def _filter_k_strict(md5_k_counts, md5_o_counts, md5_is_tsp, config, log):

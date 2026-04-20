@@ -24,6 +24,7 @@ TRAIN_FILES=(
   data/training_data/metadata/phage_protein_positives.tsv
   data/training_data/metadata/glycan_binders_custom.tsv
   data/training_data/metadata/host_phage_protein_map.tsv
+  data/training_data/metadata/candidates_clusters.tsv
 )
 
 VAL_FILES=(
