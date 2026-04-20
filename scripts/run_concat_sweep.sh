@@ -96,10 +96,13 @@ KMER_ROOT="/work/hdd/bfzj/llindsey1/kmer_features"
 VAL_EMB_ROOT="/projects/bfzj/llindsey1/PHI_TSP/phi_tsp/klebsiella/validation_data/combined/validation_inputs"
 
 EMBEDDING_PAIRS=(
-    "esm2_3b_mean     kmer_murphy8_k5   ${TRAIN_EMB_ROOT}/embeddings_esm2_3b/candidates_embeddings_md5.npz  /work/hdd/bfzj/llindsey1/validation_embeddings_esm2_3b/validation_embeddings_md5.npz  ${KMER_ROOT}/candidates_murphy8_k5.npz  ${KMER_ROOT}/validation_murphy8_k5.npz  128G"
-    "esm2_3b_mean     kmer_aa20_k4      ${TRAIN_EMB_ROOT}/embeddings_esm2_3b/candidates_embeddings_md5.npz  /work/hdd/bfzj/llindsey1/validation_embeddings_esm2_3b/validation_embeddings_md5.npz  ${KMER_ROOT}/candidates_aa20_k4.npz     ${KMER_ROOT}/validation_aa20_k4.npz     256G"
-    "prott5_mean      kmer_murphy8_k5   ${TRAIN_EMB_ROOT}/embeddings_prott5/candidates_embeddings_md5.npz   /work/hdd/bfzj/llindsey1/validation_embeddings_prott5/validation_embeddings_md5.npz   ${KMER_ROOT}/candidates_murphy8_k5.npz  ${KMER_ROOT}/validation_murphy8_k5.npz  128G"
-    "prott5_mean      kmer_aa20_k4      ${TRAIN_EMB_ROOT}/embeddings_prott5/candidates_embeddings_md5.npz   /work/hdd/bfzj/llindsey1/validation_embeddings_prott5/validation_embeddings_md5.npz   ${KMER_ROOT}/candidates_aa20_k4.npz     ${KMER_ROOT}/validation_aa20_k4.npz     256G"
+    # Pairs picked from sweeps 1–4 analysis (2026-04-20):
+    #   pLM side:  esm2_3b_mean, esm2_650m_seg4, prott5_mean (best PHL performers)
+    #   kmer side: kmer_li10_k5 (highest PHL rh@1), kmer_murphy8_k5 (top combined kmer)
+    "esm2_3b_mean      kmer_li10_k5     ${TRAIN_EMB_ROOT}/embeddings_esm2_3b/candidates_embeddings_md5.npz                                    /work/hdd/bfzj/llindsey1/validation_embeddings_esm2_3b/validation_embeddings_md5.npz                  ${KMER_ROOT}/candidates_li10_k5.npz     ${KMER_ROOT}/validation_li10_k5.npz     192G"
+    "esm2_3b_mean      kmer_murphy8_k5  ${TRAIN_EMB_ROOT}/embeddings_esm2_3b/candidates_embeddings_md5.npz                                    /work/hdd/bfzj/llindsey1/validation_embeddings_esm2_3b/validation_embeddings_md5.npz                  ${KMER_ROOT}/candidates_murphy8_k5.npz  ${KMER_ROOT}/validation_murphy8_k5.npz  128G"
+    "esm2_650m_seg4    kmer_li10_k5     /work/hdd/bfzj/llindsey1/embeddings_segments4/candidates_embeddings_segments4_md5.npz                 /work/hdd/bfzj/llindsey1/validation_embeddings_segments4/validation_embeddings_segments4_md5.npz      ${KMER_ROOT}/candidates_li10_k5.npz     ${KMER_ROOT}/validation_li10_k5.npz     192G"
+    "prott5_mean       kmer_li10_k5     ${TRAIN_EMB_ROOT}/embeddings_prott5/candidates_embeddings_md5.npz                                     /work/hdd/bfzj/llindsey1/validation_embeddings_prott5/validation_embeddings_md5.npz                   ${KMER_ROOT}/candidates_li10_k5.npz     ${KMER_ROOT}/validation_li10_k5.npz     192G"
 )
 
 # ============================================================

@@ -9,8 +9,8 @@ Idempotent: rerunning rebuilds the CSV from scratch. To reproduce any row,
 check out its git_commit and run with the saved config.yaml.
 
 Usage:
-    python scripts/harvest_results.py
-    python scripts/harvest_results.py --model attention_mlp --out results/experiment_log.csv
+    python scripts/analysis/harvest_results.py
+    python scripts/analysis/harvest_results.py --model attention_mlp --out results/experiment_log.csv
 """
 
 import argparse

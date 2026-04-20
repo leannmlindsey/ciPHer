@@ -11,9 +11,9 @@ pLM embeddings use cool colors (viridis), k-mer features use warm colors
 appear first.
 
 Usage:
-    python scripts/plot_sweep_results.py
-    python scripts/plot_sweep_results.py --filter sweep_
-    python scripts/plot_sweep_results.py --model attention_mlp --filter sweep_
+    python scripts/analysis/plot_sweep_results.py
+    python scripts/analysis/plot_sweep_results.py --filter sweep_
+    python scripts/analysis/plot_sweep_results.py --model attention_mlp --filter sweep_
 """
 
 import argparse

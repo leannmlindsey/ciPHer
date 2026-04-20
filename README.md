@@ -223,7 +223,7 @@ cipher-train --model attention_mlp \
 
 `candidates_clusters.tsv` has columns `protein_id, cl30_X, cl40_X, ...,
 cl95_X` (no header). It ships with the training-data zip; regenerate
-with `scripts/build_candidates_cluster_file.py` if candidates change.
+with `scripts/utils/build_candidates_cluster_file.py` if candidates change.
 
 Each run creates an experiment directory containing:
 - `config.yaml` — merged config (base defaults + CLI overrides)
@@ -351,11 +351,11 @@ FILTER_MODE=positive_list USE_CLUSTERS=1 bash scripts/run_concat_sweep.sh
 
 ```bash
 # Harvest every experiment's metrics + provenance into one wide CSV
-python scripts/harvest_results.py
+python scripts/analysis/harvest_results.py
 # -> results/experiment_log.csv (one row per run, sorted by PHL+PBIP HR@1)
 
 # Generate SVG figures for slide decks (PHL+PBIP + all 5 datasets)
-python scripts/plot_sweep_results.py
+python scripts/analysis/plot_sweep_results.py
 # -> results/figures/sweep_phl_pbip_hrk.svg
 # -> results/figures/sweep_all_datasets_hrk.svg
 ```

@@ -6,8 +6,8 @@ rank_phages scores. PHL (~60-98 candidates) and PBIP (~9 candidates per
 direction) are the meaningful tests per the project's validation priorities.
 
 Usage:
-    python scripts/compare_primary_datasets.py
-    python scripts/compare_primary_datasets.py --filter sweep_
+    python scripts/analysis/compare_primary_datasets.py
+    python scripts/analysis/compare_primary_datasets.py --filter sweep_
 """
 
 import argparse
