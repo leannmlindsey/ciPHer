@@ -24,7 +24,12 @@ set -euo pipefail
 ACCOUNT="bfzj-dtai-gh"
 PARTITION="ghx4"
 CONDA_ENV="${CONDA_ENV:-esmfold2}"
-CIPHER_DIR="/projects/bfzj/llindsey1/PHI_TSP/ciPHer"
+
+# Auto-detect CIPHER_DIR from the script's own location (repo root = dir
+# containing this scripts/ folder). Override with CIPHER_DIR=... to point
+# elsewhere.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CIPHER_DIR="${CIPHER_DIR:-$(dirname "$SCRIPT_DIR")}"
 
 # ============================================================
 # Data paths on Delta (no symlinks needed)
