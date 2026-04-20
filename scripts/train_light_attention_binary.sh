@@ -4,11 +4,17 @@
 # (K head + O head, sequentially) on ESM-2 650M per-residue embeddings, then
 # runs cipher-evaluate on the resulting experiment.
 #
+# CIPHER_DIR (code + experiments + logs) is auto-detected from the script's
+# location. DATA_DIR (shared training/validation data) defaults to the main
+# worktree at /projects/bfzj/llindsey1/PHI_TSP/ciPHer/data so it doesn't
+# need to be duplicated per branch.
+#
 # Usage:
 #   bash scripts/train_light_attention_binary.sh                 # submit
 #   DRY_RUN=1 bash scripts/train_light_attention_binary.sh       # print only
 #   NAME=my_run bash scripts/train_light_attention_binary.sh     # override run name
 #   LR=1e-4 BATCH_SIZE=16 bash scripts/train_light_attention_binary.sh
+#   DATA_DIR=/some/other/data bash scripts/train_light_attention_binary.sh
 #
 
 set -euo pipefail
@@ -19,7 +25,17 @@ set -euo pipefail
 ACCOUNT="bfzj-dtai-gh"
 PARTITION="ghx4"
 CONDA_ENV="${CONDA_ENV:-esmfold2}"
-CIPHER_DIR="${CIPHER_DIR:-/projects/bfzj/llindsey1/PHI_TSP/cipher-light-attention-binary}"
+
+# Auto-detect CIPHER_DIR from this script's location (repo root = dir
+# containing scripts/). Override with CIPHER_DIR=... to point elsewhere.
+# CIPHER_DIR is where code + experiments + logs live.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CIPHER_DIR="${CIPHER_DIR:-$(dirname "$SCRIPT_DIR")}"
+
+# DATA_DIR is the canonical data home on Delta — shared across all worktrees
+# / clones so we don't duplicate 10s of GB of TSVs + validation data. The
+# main worktree at /projects/bfzj/llindsey1/PHI_TSP/ciPHer holds the data.
+DATA_DIR="${DATA_DIR:-/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data}"
 
 GPUS="${GPUS:-1}"
 CPUS="${CPUS:-8}"
@@ -27,12 +43,12 @@ MEM="${MEM:-0}"          # 0 = all memory on the node
 TIME="${TIME:-24:00:00}"
 
 # ============================================================
-# Data paths on Delta
+# Data paths (resolved from DATA_DIR, not CIPHER_DIR)
 # ============================================================
-ASSOC_MAP="${ASSOC_MAP:-${CIPHER_DIR}/data/training_data/metadata/host_phage_protein_map.tsv}"
-GLYCAN_BINDERS="${GLYCAN_BINDERS:-${CIPHER_DIR}/data/training_data/metadata/glycan_binders_custom.tsv}"
-VAL_FASTA="${VAL_FASTA:-${CIPHER_DIR}/data/validation_data/metadata/validation_rbps_all.faa}"
-VAL_DATASETS_DIR="${VAL_DATASETS_DIR:-${CIPHER_DIR}/data/validation_data/HOST_RANGE}"
+ASSOC_MAP="${ASSOC_MAP:-${DATA_DIR}/training_data/metadata/host_phage_protein_map.tsv}"
+GLYCAN_BINDERS="${GLYCAN_BINDERS:-${DATA_DIR}/training_data/metadata/glycan_binders_custom.tsv}"
+VAL_FASTA="${VAL_FASTA:-${DATA_DIR}/validation_data/metadata/validation_rbps_all.faa}"
+VAL_DATASETS_DIR="${VAL_DATASETS_DIR:-${DATA_DIR}/validation_data/HOST_RANGE}"
 
 # Per-residue ESM-2 650M embeddings (variable-length, used by ConvAttn pooler)
 TRAIN_EMB="${TRAIN_EMB:-/work/hdd/bfzj/llindsey1/embeddings_full/candidates_embeddings_full_md5.npz}"
