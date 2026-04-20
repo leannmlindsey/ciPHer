@@ -26,7 +26,7 @@ CIPHER_DIR="/projects/bfzj/llindsey1/PHI_TSP/ciPHer"
 # ============================================================
 # Data paths on Delta (no symlinks needed)
 # ============================================================
-ASSOC_MAP="/projects/bfzj/llindsey1/RBP_Structural_Similarity/input/host_phage_protein_map.tsv"
+ASSOC_MAP="/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/training_data/metadata/host_phage_protein_map.tsv"
 GLYCAN_BINDERS="/projects/bfzj/llindsey1/RBP_Structural_Similarity/input/glycan_binders_custom.tsv"
 VAL_FASTA="/projects/bfzj/llindsey1/PHI_TSP/phi_tsp/klebsiella/validation_data/combined/validation_inputs/validation_rbps_all.faa"
 VAL_DATASETS_DIR="/projects/bfzj/llindsey1/PHI_TSP/phi_tsp/klebsiella/validation_data/combined/HOST_RANGE"
