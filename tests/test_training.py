@@ -10,7 +10,7 @@ from cipher.data.training import (
     TrainingConfig, TrainingData, prepare_training_data,
     TOOL_COLUMNS,
     _filter_proteins, _build_md5_associations, _apply_single_label,
-    _build_label_vectors,
+    _build_label_vectors, _cluster_stratified_sample,
 )
 
 FIXTURES = os.path.join(os.path.dirname(__file__), 'test_data')
@@ -448,6 +448,43 @@ class TestBuildLabelVectors:
 
         assert k_classes == ['K1', 'K2', 'K3']
         assert k_labels.shape[1] == 3
+
+
+class TestClusterStratifiedSample:
+    def test_round_robin_prefers_diversity(self):
+        """With cap < n_clusters, should take one per distinct cluster."""
+        md5s = [f'm{i}' for i in range(10)]
+        # 3 clusters: m0-m4 in A (5), m5-m7 in B (3), m8-m9 in C (2)
+        cluster_map = {f'm{i}': 'A' for i in range(5)}
+        cluster_map.update({f'm{i}': 'B' for i in range(5, 8)})
+        cluster_map.update({f'm{i}': 'C' for i in range(8, 10)})
+        rng = np.random.default_rng(42)
+        chosen = _cluster_stratified_sample(md5s, cap=3, cluster_map=cluster_map, rng=rng)
+        assert len(chosen) == 3
+        chosen_clusters = {cluster_map[m] for m in chosen}
+        assert chosen_clusters == {'A', 'B', 'C'}
+
+    def test_cap_larger_than_pool_returns_all(self):
+        md5s = ['a', 'b', 'c']
+        cluster_map = {'a': 'X', 'b': 'X', 'c': 'Y'}
+        rng = np.random.default_rng(0)
+        chosen = _cluster_stratified_sample(md5s, cap=10, cluster_map=cluster_map, rng=rng)
+        assert set(chosen) == set(md5s)
+
+    def test_missing_cluster_treated_as_singleton(self):
+        """MD5s without a cluster entry should still be sampled, not collide."""
+        md5s = ['a', 'b', 'c', 'd']
+        cluster_map = {'a': 'X', 'b': 'X'}  # c, d have no entry
+        rng = np.random.default_rng(0)
+        chosen = _cluster_stratified_sample(md5s, cap=4, cluster_map=cluster_map, rng=rng)
+        assert set(chosen) == {'a', 'b', 'c', 'd'}
+
+    def test_deterministic_with_seed(self):
+        md5s = [f'm{i}' for i in range(20)]
+        cluster_map = {f'm{i}': f'c{i % 5}' for i in range(20)}
+        r1 = _cluster_stratified_sample(md5s, 10, cluster_map, np.random.default_rng(7))
+        r2 = _cluster_stratified_sample(md5s, 10, cluster_map, np.random.default_rng(7))
+        assert r1 == r2
 
 
 class TestApplySingleLabel:

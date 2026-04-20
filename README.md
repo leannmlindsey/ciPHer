@@ -172,11 +172,49 @@ cipher-train --model attention_mlp \
 Valid tool names: `DePP_85`, `PhageRBPdetect`, `DepoScope`, `DepoRanker`,
 `SpikeHunter`, `dbCAN`, `IPR`, `phold_glycan_tailspike`.
 
+#### Training-set filter: `--tools` vs `--positive_list`
+
+Two mutually exclusive ways to decide which candidate proteins enter training:
+
+| Filter | Flag | Notes |
+|---|---|---|
+| Tool flags | `--tools DepoScope,PhageRBPdetect` (default) | Keep proteins flagged by **any** listed tool |
+| Pipeline-positive list | `--positive_list data/training_data/metadata/pipeline_positive.list` | Intersect candidates with this file only; ignore tool flags |
+
+```bash
+# Use the positive list (broader — includes PhageRBPdetect-only adhesins
+# that the DepoScope tool filter would exclude):
+cipher-train --model attention_mlp \
+    --positive_list data/training_data/metadata/pipeline_positive.list \
+    --label_strategy multi_label_threshold --min_class_samples 25
+```
+
+#### Cluster-stratified downsampling (`--cluster_file`)
+
+`--max_samples_per_k` / `--max_samples_per_o` cap per-class sample counts.
+By default the cap is filled by **random sampling**, which tends to retain
+near-duplicate sequences in over-represented classes. Passing a cluster
+file switches to **round-robin across clusters** — it takes one protein
+per cluster until the cap is met, looping back to refill from larger
+clusters. This maximises sequence diversity in the training sample.
+
+```bash
+# Cluster-stratified sampling at 70% identity:
+cipher-train --model attention_mlp \
+    --cluster_file data/training_data/metadata/candidates_clusters.tsv \
+    --cluster_threshold 70 \
+    --max_samples_per_k 1000 --max_samples_per_o 3000
+```
+
+`candidates_clusters.tsv` has columns `protein_id, cl30_X, cl40_X, ...,
+cl95_X` (no header). It ships with the training-data zip; regenerate
+with `scripts/build_candidates_cluster_file.py` if candidates change.
+
 Each run creates an experiment directory containing:
 - `config.yaml` — merged config (base defaults + CLI overrides)
 - `model_k/` — trained K-type head (`best_model.pt`, `config.json`, `training_history.json`)
 - `model_o/` — trained O-type head (same structure)
-- `experiment.json` — metadata (timestamp, data summary)
+- `experiment.json` — metadata + provenance (git commit, host, SLURM job id, user, argv)
 
 #### Label strategies
 
@@ -262,6 +300,40 @@ bash scripts/run_embedding_sweep.sh
 # Submit a single embedding
 bash scripts/run_embedding_sweep.sh esm2_3b_mean
 ```
+
+Two env vars toggle the training-set filter and the sampling strategy.
+They combine freely; run names reflect the combination so results coexist
+in `experiments/attention_mlp/`:
+
+```bash
+# Pipeline-positive filter instead of --tools (adds 'posList' to run name)
+FILTER_MODE=positive_list bash scripts/run_embedding_sweep.sh
+
+# Cluster-stratified downsampling at 70% (adds 'cl70' suffix)
+USE_CLUSTERS=1 bash scripts/run_embedding_sweep.sh
+
+# Both together — 4 variants per embedding possible
+FILTER_MODE=positive_list USE_CLUSTERS=1 bash scripts/run_embedding_sweep.sh
+```
+
+### Persistent results log + figures
+
+```bash
+# Harvest every experiment's metrics + provenance into one wide CSV
+python scripts/harvest_results.py
+# -> results/experiment_log.csv (one row per run, sorted by PHL+PBIP HR@1)
+
+# Generate SVG figures for slide decks (PHL+PBIP + all 5 datasets)
+python scripts/plot_sweep_results.py
+# -> results/figures/sweep_phl_pbip_hrk.svg
+# -> results/figures/sweep_all_datasets_hrk.svg
+```
+
+The CSV is rebuilt idempotently from `experiment.json` +
+`results/evaluation.json` in every run dir, so it's safe to re-run after
+new experiments finish. Provenance (git commit, host, SLURM job id,
+user, argv) is captured automatically at training time via
+`cipher.provenance.capture_provenance()`.
 
 ## Testing
 

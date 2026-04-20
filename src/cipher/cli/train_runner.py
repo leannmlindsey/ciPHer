@@ -73,6 +73,12 @@ def apply_overrides(config, args):
         excl = [t.strip() for t in args.exclude_tools.split(',') if t.strip()]
         config.setdefault('experiment', {})['exclude_tools'] = excl
         config['experiment'].pop('protein_set', None)
+    if args.positive_list is not None:
+        # Mutex with tool-based filters — clear any inherited defaults
+        config.setdefault('experiment', {})['positive_list_path'] = args.positive_list
+        config['experiment'].pop('tools', None)
+        config['experiment'].pop('exclude_tools', None)
+        config['experiment'].pop('protein_set', None)
     if args.min_sources is not None:
         config.setdefault('experiment', {})['min_sources'] = args.min_sources
     if args.max_k_types is not None:
@@ -92,6 +98,10 @@ def apply_overrides(config, args):
         config.setdefault('experiment', {})['min_label_fraction'] = args.min_label_fraction
     if args.min_class_samples is not None:
         config.setdefault('experiment', {})['min_class_samples'] = args.min_class_samples
+    if args.cluster_file is not None:
+        config.setdefault('experiment', {})['cluster_file_path'] = args.cluster_file
+    if args.cluster_threshold is not None:
+        config.setdefault('experiment', {})['cluster_threshold'] = args.cluster_threshold
 
     # Model overrides
     if args.hidden_dims is not None:
@@ -135,14 +145,26 @@ def _tools_name_component(exp):
         exclude=['SpikeHunter']                -> 'noSpikeHunter'
         tools=['DepoScope'], exclude=['SpikeHunter'] -> 'DepoScope_noSpikeHunter'
         protein_set='tsp_only' (legacy)        -> 'tsp_only'
+        positive_list_path set                 -> 'posList'
     """
+    cluster_tag = None
+    if exp.get('cluster_file_path'):
+        t = exp.get('cluster_threshold') or 70
+        cluster_tag = f'cl{t}'
+
+    def _with_cluster(base):
+        return f'{base}_{cluster_tag}' if cluster_tag else base
+
+    if exp.get('positive_list_path'):
+        return _with_cluster('posList')
+
     # If legacy protein_set is still set (not translated), use it
     ps = exp.get('protein_set')
     tools = exp.get('tools')
     excl = exp.get('exclude_tools')
 
     if ps and not tools and not excl:
-        return ps
+        return _with_cluster(ps)
 
     parts = []
     if tools:
@@ -151,8 +173,8 @@ def _tools_name_component(exp):
         parts.append('no' + '-'.join(sorted(excl)))
 
     if not parts:
-        return 'allTools'
-    return '_'.join(parts)
+        return _with_cluster('allTools')
+    return _with_cluster('_'.join(parts))
 
 
 def generate_run_name(config):
@@ -346,6 +368,10 @@ Examples:
     parser.add_argument('--protein_set',
                         help='DEPRECATED: use --tools/--exclude_tools. '
                              'Values: all_glycan_binders, tsp_only, rbp_only')
+    parser.add_argument('--positive_list',
+                        help='Path to a positive-list file (one protein ID per line). '
+                             'Filters candidates to these IDs only. Mutually '
+                             'exclusive with --tools/--exclude_tools/--protein_set.')
     parser.add_argument('--min_sources', type=int,
                         help=f'Min tool sources for filtering; set to 1 to disable '
                              f'(default: {fmt(d_exp.get("min_sources"))})')
@@ -371,6 +397,14 @@ Examples:
                         help=f'Drop K and O classes with < N training samples '
                              f'(default: {fmt(d_exp.get("min_class_samples"), "no filter")}; '
                              f'try 25)')
+    parser.add_argument('--cluster_file',
+                        help='Path to candidates_clusters.tsv. When set, '
+                             'per-class downsampling uses round-robin across '
+                             'clusters instead of random sampling (default: off).')
+    parser.add_argument('--cluster_threshold', type=int,
+                        choices=[30, 40, 50, 60, 70, 80, 85, 90, 95],
+                        help=f'Identity threshold column in cluster_file '
+                             f'(default: {fmt(d_exp.get("cluster_threshold"), 70)})')
 
     # Model params
     parser.add_argument('--hidden_dims',
@@ -412,6 +446,12 @@ Examples:
                         help='Custom run name (default: auto-generated from params + timestamp)')
 
     args = parser.parse_args()
+
+    # Enforce mutual exclusion early (clearer error than at config-load time)
+    if args.positive_list and (args.tools or args.exclude_tools or args.protein_set):
+        parser.error(
+            '--positive_list is mutually exclusive with --tools, '
+            '--exclude_tools, and --protein_set.')
 
     project_root = find_project_root()
 

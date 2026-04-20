@@ -402,6 +402,7 @@ def train(experiment_dir, config):
                td.o_classes, config, os.path.join(experiment_dir, 'model_o'))
 
     # Save experiment metadata
+    from cipher.provenance import capture_provenance
     experiment_meta = {
         'model': 'attention_mlp',
         'config': config,
@@ -409,6 +410,7 @@ def train(experiment_dir, config):
         'n_k_classes': len(td.k_classes),
         'n_o_classes': len(td.o_classes),
         'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'provenance': capture_provenance(),
     }
     with open(os.path.join(experiment_dir, 'experiment.json'), 'w') as f:
         json.dump(experiment_meta, f, indent=2)

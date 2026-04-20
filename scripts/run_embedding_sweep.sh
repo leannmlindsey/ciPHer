@@ -4,7 +4,7 @@
 # Designed for Delta-AI (SLURM). Each embedding gets its own job.
 #
 # Usage:
-#   # Submit all jobs:
+#   # Submit all jobs (default: tool-filtered training set):
 #   bash scripts/run_embedding_sweep.sh
 #
 #   # Submit a single embedding:
@@ -12,6 +12,18 @@
 #
 #   # Dry run (print commands without submitting):
 #   DRY_RUN=1 bash scripts/run_embedding_sweep.sh
+#
+#   # Use the pipeline-positive list as the training filter (instead of
+#   # --tools). Run names get a 'posList' prefix so results coexist with
+#   # the tool-filter sweep in experiments/.
+#   FILTER_MODE=positive_list bash scripts/run_embedding_sweep.sh
+#
+#   # Cluster-stratified downsampling (round-robin across clusters instead
+#   # of random sampling). Run names get a 'cl70' suffix.
+#   USE_CLUSTERS=1 bash scripts/run_embedding_sweep.sh
+#
+#   # Combine both toggles:
+#   FILTER_MODE=positive_list USE_CLUSTERS=1 bash scripts/run_embedding_sweep.sh
 
 set -euo pipefail
 
@@ -26,10 +38,13 @@ CIPHER_DIR="/projects/bfzj/llindsey1/PHI_TSP/ciPHer"
 # ============================================================
 # Data paths on Delta (no symlinks needed)
 # ============================================================
-ASSOC_MAP="/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/training_data/metadata/host_phage_protein_map.tsv"
+ASSOC_MAP="${CIPHER_DIR}/data/training_data/metadata/host_phage_protein_map.tsv"
 GLYCAN_BINDERS="${CIPHER_DIR}/data/training_data/metadata/glycan_binders_custom.tsv"
-VAL_FASTA="/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/validation_data/metadata/validation_rbps_all.faa"
-VAL_DATASETS_DIR="/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/validation_data/HOST_RANGE"
+POSITIVE_LIST="${CIPHER_DIR}/data/training_data/metadata/pipeline_positive.list"
+CLUSTER_FILE="${CIPHER_DIR}/data/training_data/metadata/candidates_clusters.tsv"
+CLUSTER_THRESHOLD="${CLUSTER_THRESHOLD:-70}"
+VAL_FASTA="${CIPHER_DIR}/data/validation_data/metadata/validation_rbps_all.faa"
+VAL_DATASETS_DIR="${CIPHER_DIR}/data/validation_data/HOST_RANGE"
 
 # SLURM resources (per-embedding MEM is set in the EMBEDDINGS array below)
 GPUS=1
@@ -42,6 +57,25 @@ TIME="12:00:00"
 MODEL="attention_mlp"
 TOOLS="DepoScope,PhageRBPdetect"
 LR="1e-05"
+
+# Training-set filter mode. Controls which flag is passed to cipher-train.
+#   tools         -> --tools ${TOOLS}     (default, matches original sweep)
+#   positive_list -> --positive_list ${POSITIVE_LIST}
+FILTER_MODE="${FILTER_MODE:-tools}"
+if [[ "$FILTER_MODE" != "tools" && "$FILTER_MODE" != "positive_list" ]]; then
+    echo "ERROR: FILTER_MODE must be 'tools' or 'positive_list', got '$FILTER_MODE'" >&2
+    exit 1
+fi
+if [[ "$FILTER_MODE" == "positive_list" && ! -f "$POSITIVE_LIST" ]]; then
+    echo "ERROR: POSITIVE_LIST not found: $POSITIVE_LIST" >&2
+    exit 1
+fi
+
+USE_CLUSTERS="${USE_CLUSTERS:-0}"
+if [[ "$USE_CLUSTERS" == "1" && ! -f "$CLUSTER_FILE" ]]; then
+    echo "ERROR: CLUSTER_FILE not found: $CLUSTER_FILE" >&2
+    exit 1
+fi
 BATCH_SIZE=512
 EPOCHS=1000
 PATIENCE=30
@@ -70,10 +104,10 @@ EMBEDDINGS=(
 
     # K-mer features (best separation results only)
     "kmer_murphy8_k5    ${KMER_ROOT}/candidates_murphy8_k5.npz      ${KMER_ROOT}/validation_murphy8_k5.npz   64G"
-    "kmer_murphy10_k5   ${KMER_ROOT}/candidates_murphy10_k5.npz     ${KMER_ROOT}/validation_murphy10_k5.npz  128G"
+    "kmer_murphy10_k5   ${KMER_ROOT}/candidates_murphy10_k5.npz     ${KMER_ROOT}/validation_murphy10_k5.npz  192G"
     "kmer_li10_k5       ${KMER_ROOT}/candidates_li10_k5.npz         ${KMER_ROOT}/validation_li10_k5.npz      64G"
     "kmer_aa20_k3       ${KMER_ROOT}/candidates_aa20_k3.npz         ${KMER_ROOT}/validation_aa20_k3.npz      64G"
-    "kmer_aa20_k4       ${KMER_ROOT}/candidates_aa20_k4.npz         ${KMER_ROOT}/validation_aa20_k4.npz      192G"
+    "kmer_aa20_k4       ${KMER_ROOT}/candidates_aa20_k4.npz         ${KMER_ROOT}/validation_aa20_k4.npz      256G"
 )
 
 # ============================================================
@@ -102,7 +136,19 @@ for entry in "${EMBEDDINGS[@]}"; do
         continue
     fi
 
-    NAME="sweep_${LABEL}"
+    if [[ "$FILTER_MODE" == "positive_list" ]]; then
+        NAME="sweep_posList_${LABEL}"
+        FILTER_ARG="--positive_list ${POSITIVE_LIST}"
+    else
+        NAME="sweep_${LABEL}"
+        FILTER_ARG="--tools ${TOOLS}"
+    fi
+    if [[ "$USE_CLUSTERS" == "1" ]]; then
+        NAME="${NAME}_cl${CLUSTER_THRESHOLD}"
+        CLUSTER_ARG="--cluster_file ${CLUSTER_FILE} --cluster_threshold ${CLUSTER_THRESHOLD}"
+    else
+        CLUSTER_ARG=""
+    fi
 
     # Pre-submit checks
     if [ ! -f "$TRAIN_EMB" ]; then
@@ -118,7 +164,8 @@ for entry in "${EMBEDDINGS[@]}"; do
     # Build train command
     TRAIN_CMD="python -m cipher.cli.train_runner \
         --model ${MODEL} \
-        --tools ${TOOLS} \
+        ${FILTER_ARG} \
+        ${CLUSTER_ARG} \
         --lr ${LR} \
         --batch_size ${BATCH_SIZE} \
         --epochs ${EPOCHS} \
