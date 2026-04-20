@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name="cipher",
     version="0.1.0",
-    description="ciPHer: Capsule Interaction Prediction of Phage-Host Relationships",
+    description="ciPHer: Computational Inference of Phage-Host Entry Range",
     package_dir={"": "src"},
     packages=find_packages(where="src"),
     python_requires=">=3.9",

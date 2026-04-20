@@ -28,8 +28,8 @@ CIPHER_DIR="/projects/bfzj/llindsey1/PHI_TSP/ciPHer"
 # ============================================================
 ASSOC_MAP="/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/training_data/metadata/host_phage_protein_map.tsv"
 GLYCAN_BINDERS="/projects/bfzj/llindsey1/RBP_Structural_Similarity/input/glycan_binders_custom.tsv"
-VAL_FASTA="/projects/bfzj/llindsey1/PHI_TSP/phi_tsp/klebsiella/validation_data/combined/validation_inputs/validation_rbps_all.faa"
-VAL_DATASETS_DIR="/projects/bfzj/llindsey1/PHI_TSP/phi_tsp/klebsiella/validation_data/combined/HOST_RANGE"
+VAL_FASTA="/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/validation_data/metadata/validation_rbps_all.faa"
+VAL_DATASETS_DIR="/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/validation_data/HOST_RANGE"
 
 # SLURM resources
 GPUS=1

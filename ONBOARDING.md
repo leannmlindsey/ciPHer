@@ -1,6 +1,6 @@
 # ciPHer Onboarding Guide
 
-**ciPHer** = Capsule Interaction Prediction of Phage–Host Relationships
+**ciPHer** = Computational Inference of Phage-Host Entry Range
 
 ## What This Project Does
 

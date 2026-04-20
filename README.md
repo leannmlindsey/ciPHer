@@ -1,6 +1,6 @@
 # ciPHer
 
-**Capsule Interaction Prediction of Phage-Host Relationships**
+**Computational Inference of Phage-Host Entry Range**
 
 Predicts phage-host interactions for Klebsiella bacteria by matching phage
 receptor binding proteins (RBPs/TSPs) to host capsular serotypes (K-type,
