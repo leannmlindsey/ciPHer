@@ -1,0 +1,57 @@
+# Light Attention — "match-sweep" profile.
+#
+# Mirrors the settings used by scripts/run_embedding_sweep.sh (which held
+# the attention_mlp model fixed across embeddings), so LA results are
+# directly comparable to the sweep's per-embedding numbers on PHL/PBIP.
+#
+# Use via: cipher-train --model light_attention --config models/light_attention/sweep_config.yaml
+
+model:
+  # First layer = 2 * embedding_dim (LA output = attention + max pool).
+  hidden_dims: [2560, 1280, 640, 320, 160]
+  attention_dim: 640
+  dropout: 0.1
+
+light_attention:
+  kernel_size: 9
+  conv_dropout: 0.25
+
+training:
+  # batch_size 32 (vs the sweep's 512) because LA forward adds padding overhead
+  # on variable-length inputs. For fixed-length seg4 (L=4) we could raise this,
+  # but seg16 / per-residue will need the smaller default. Override on CLI if
+  # seg4 memory allows a larger batch.
+  batch_size: 32
+  learning_rate: 0.00001
+  epochs: 1000
+  patience: 30
+  seed: 42
+  train_ratio: 0.7
+  val_ratio: 0.15
+  use_pos_weight: true
+
+data:
+  association_map: data/training_data/metadata/host_phage_protein_map.tsv
+  glycan_binders: data/training_data/metadata/glycan_binders_custom.tsv
+  embedding_type: esm2_650m_seg4
+  embedding_file: data/training_data/embeddings/esm2_650m_seg4_md5.npz
+
+validation:
+  val_fasta: data/validation_data/metadata/validation_rbps_all.faa
+  val_embedding_file: data/validation_data/embeddings/esm2_650m_seg4_md5.npz
+  val_datasets_dir: data/validation_data/HOST_RANGE
+
+experiment:
+  # Match-sweep: tool-filtered to DepoScope + PhageRBPdetect, min_sources=1,
+  # multi_label_threshold with downsampling caps. Training uses F1_micro for
+  # early stopping because label_strategy is multi_label_threshold.
+  tools:
+    - DepoScope
+    - PhageRBPdetect
+  exclude_tools: null
+  min_sources: 1
+  min_class_samples: 25
+  max_samples_per_k: 1000
+  max_samples_per_o: 3000
+  label_strategy: multi_label_threshold
+  single_label: false

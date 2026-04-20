@@ -253,22 +253,33 @@ def _default_hint(config, section, key, fallback='<from base_config>'):
 def _get_default_config_for_help():
     """Try to load a base config for showing defaults in --help.
 
-    Looks for --model in sys.argv. If present, loads that model's base config.
-    If not present, tries the only available model (if unique).
-    Returns (config, model_name) or (None, None).
+    Looks for --config in sys.argv first (alt config yaml takes priority);
+    otherwise looks for --model and loads that model's base_config.yaml.
+    Returns (config, source_description) where source_description is either
+    the config path or the model name, or ({}, None) if nothing was found.
     """
     project_root = find_project_root()
 
-    # Look for --model in argv
+    # Look for --config / --model in argv
     model_name = None
+    config_path = None
     argv = sys.argv[1:]
     for i, arg in enumerate(argv):
         if arg == '--model' and i + 1 < len(argv):
             model_name = argv[i + 1]
-            break
-        if arg.startswith('--model='):
+        elif arg.startswith('--model='):
             model_name = arg.split('=', 1)[1]
-            break
+        elif arg == '--config' and i + 1 < len(argv):
+            config_path = argv[i + 1]
+        elif arg.startswith('--config='):
+            config_path = arg.split('=', 1)[1]
+
+    if config_path:
+        try:
+            with open(config_path) as f:
+                return yaml.safe_load(f) or {}, config_path
+        except (FileNotFoundError, yaml.YAMLError):
+            pass
 
     if model_name is None:
         available = _available_models(project_root)
@@ -286,7 +297,7 @@ def _get_default_config_for_help():
 
 def main():
     # Load base config (if model is known) to show defaults in --help
-    base_cfg, base_model = _get_default_config_for_help()
+    base_cfg, base_source = _get_default_config_for_help()
     d_train = base_cfg.get('training', {})
     d_exp = base_cfg.get('experiment', {})
     d_model = base_cfg.get('model', {})
@@ -299,8 +310,11 @@ def main():
             return ','.join(str(v) for v in val)
         return str(val)
 
-    if base_model:
-        defaults_note = f'(defaults shown from models/{base_model}/base_config.yaml)'
+    if base_source:
+        if base_source.endswith(('.yaml', '.yml')):
+            defaults_note = f'(defaults shown from {base_source})'
+        else:
+            defaults_note = f'(defaults shown from models/{base_source}/base_config.yaml)'
     else:
         defaults_note = '(pass --model first to see defaults; otherwise defaults come from base_config.yaml)'
 
@@ -318,6 +332,10 @@ Examples:
     # Required
     parser.add_argument('--model', required=True,
                         help='Model name (directory in models/)')
+    parser.add_argument('--config',
+                        help='Path to an alternate config YAML. Replaces the '
+                             'default models/{model}/base_config.yaml as the '
+                             'starting config; CLI flags still override on top.')
 
     # Training params
     parser.add_argument('--lr', type=float,
@@ -415,8 +433,16 @@ Examples:
 
     project_root = find_project_root()
 
-    # Load base config and apply overrides
-    config = load_base_config(args.model, project_root)
+    # Load base config and apply overrides. --config replaces the default
+    # models/{model}/base_config.yaml; CLI flags still override on top.
+    if args.config:
+        if not os.path.exists(args.config):
+            raise FileNotFoundError(f'Config file not found: {args.config}')
+        with open(args.config) as f:
+            config = yaml.safe_load(f) or {}
+        print(f'Using config: {args.config}')
+    else:
+        config = load_base_config(args.model, project_root)
     config = apply_overrides(config, args)
 
     # Generate experiment directory

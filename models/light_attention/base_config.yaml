@@ -1,0 +1,47 @@
+# Light Attention default configuration (reproduce-old profile).
+#
+# Matches the original klebsiella repo settings that produced the seg4
+# reference numbers. Switch to the match-sweep profile by overriding
+# experiment.label_strategy, experiment.tools, and the downsampling caps
+# on the CLI (see scripts/run_embedding_sweep.sh for the sweep values).
+
+model:
+  # First layer must equal 2 * embedding_dim (pooled output). 2*1280 = 2560.
+  hidden_dims: [2560, 1280, 640, 320, 160]
+  attention_dim: 640
+  dropout: 0.1
+
+light_attention:
+  kernel_size: 9
+  conv_dropout: 0.25
+
+training:
+  batch_size: 32
+  learning_rate: 0.00001
+  epochs: 200
+  patience: 30
+  seed: 42
+  train_ratio: 0.7
+  val_ratio: 0.15
+
+data:
+  association_map: data/training_data/metadata/host_phage_protein_map.tsv
+  glycan_binders: data/training_data/metadata/glycan_binders_custom.tsv
+  embedding_type: esm2_650m_seg4
+  embedding_file: data/training_data/embeddings/esm2_650m_seg4_md5.npz
+
+validation:
+  val_fasta: data/validation_data/metadata/validation_rbps_all.faa
+  val_embedding_file: data/validation_data/embeddings/esm2_650m_seg4_md5.npz
+  val_datasets_dir: data/validation_data/HOST_RANGE
+
+experiment:
+  # Reproduce-old profile: no tool filter (= old "all_glycan_binders"),
+  # stricter min_sources/max_types, single-label softmax.
+  tools: null
+  exclude_tools: null
+  min_sources: 3
+  max_k_types: 3
+  max_o_types: 3
+  single_label: true
+  label_strategy: single_label
