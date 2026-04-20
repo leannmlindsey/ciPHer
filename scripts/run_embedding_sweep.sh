@@ -276,6 +276,6 @@ else
     echo "Monitor: squeue -u \$USER"
     echo ""
     echo "After completion, compare results:"
-    echo "  python scripts/compare_experiments.py"
+    echo "  python scripts/analysis/compare_experiments.py"
 fi
 echo "============================================================"
