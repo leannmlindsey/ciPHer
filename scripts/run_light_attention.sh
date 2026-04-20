@@ -44,6 +44,12 @@ GLYCAN_BINDERS="${DATA_DIR}/training_data/metadata/glycan_binders_custom.tsv"
 VAL_FASTA="${DATA_DIR}/validation_data/metadata/validation_rbps_all.faa"
 VAL_DATASETS_DIR="${DATA_DIR}/validation_data/HOST_RANGE"
 
+# Advisor's curated TSP/RBP list (used when profile name contains "_posList").
+POSITIVE_LIST="${DATA_DIR}/training_data/metadata/pipeline_positive.list"
+# Sequence-cluster TSV with multi-threshold columns (used when profile name
+# contains "_cl<threshold>"); cluster_threshold picks which column to use.
+CLUSTER_FILE="${DATA_DIR}/training_data/metadata/candidates_clusters.tsv"
+
 # Segments-4 embeddings (from run_embedding_sweep.sh)
 SEG4_TRAIN_EMB="/work/hdd/bfzj/llindsey1/embeddings_segments4/candidates_embeddings_segments4_md5.npz"
 SEG4_VAL_EMB="/work/hdd/bfzj/llindsey1/validation_embeddings_segments4/validation_embeddings_segments4_md5.npz"
@@ -63,8 +69,11 @@ MEM=0   # 0 = all available
 MODEL="light_attention"
 
 PROFILES=(
-    "la_seg4_reproduce_old  models/light_attention/base_config.yaml   ${SEG4_TRAIN_EMB}  ${SEG4_VAL_EMB}"
-    "la_seg4_match_sweep    models/light_attention/sweep_config.yaml  ${SEG4_TRAIN_EMB}  ${SEG4_VAL_EMB}"
+    "la_seg4_reproduce_old   models/light_attention/base_config.yaml   ${SEG4_TRAIN_EMB}  ${SEG4_VAL_EMB}"
+    "la_seg4_match_sweep     models/light_attention/sweep_config.yaml  ${SEG4_TRAIN_EMB}  ${SEG4_VAL_EMB}"
+    # Winning config from main's attention_mlp sweep: advisor's positive list
+    # + cluster-stratified downsampling at 70% identity.
+    "la_seg4_posList_cl70    models/light_attention/sweep_config.yaml  ${SEG4_TRAIN_EMB}  ${SEG4_VAL_EMB}"
 )
 
 # ============================================================
@@ -93,6 +102,28 @@ for entry in "${PROFILES[@]}"; do
     CONFIG_ABS="${CIPHER_DIR}/${CONFIG_REL}"
     EMB_TYPE="esm2_650m_seg4"
 
+    # Per-profile extras parsed from the profile name.
+    # - "_posList"  -> --positive_list (advisor's curated TSP/RBP list)
+    # - "_clNN"     -> --cluster_file + --cluster_threshold NN
+    EXTRA_ARGS=""
+    if [[ "$NAME" == *"_posList"* ]]; then
+        if [ ! -f "$POSITIVE_LIST" ]; then
+            echo "  SKIP ${NAME} — positive_list not found: ${POSITIVE_LIST}"
+            N_SKIPPED=$((N_SKIPPED + 1))
+            continue
+        fi
+        EXTRA_ARGS="${EXTRA_ARGS} --positive_list ${POSITIVE_LIST}"
+    fi
+    if [[ "$NAME" =~ _cl([0-9]+) ]]; then
+        CL_THRESH="${BASH_REMATCH[1]}"
+        if [ ! -f "$CLUSTER_FILE" ]; then
+            echo "  SKIP ${NAME} — cluster_file not found: ${CLUSTER_FILE}"
+            N_SKIPPED=$((N_SKIPPED + 1))
+            continue
+        fi
+        EXTRA_ARGS="${EXTRA_ARGS} --cluster_file ${CLUSTER_FILE} --cluster_threshold ${CL_THRESH}"
+    fi
+
     # Pre-submit checks
     if [ ! -f "$TRAIN_EMB" ]; then
         echo "  SKIP ${NAME} — training embeddings not found: ${TRAIN_EMB}"
@@ -118,7 +149,7 @@ for entry in "${PROFILES[@]}"; do
         --glycan_binders ${GLYCAN_BINDERS} \
         --val_fasta ${VAL_FASTA} \
         --val_datasets_dir ${VAL_DATASETS_DIR} \
-        --val_embedding_file ${VAL_EMB} \
+        --val_embedding_file ${VAL_EMB}${EXTRA_ARGS} \
         --name ${NAME}"
 
     EXP_DIR="${CIPHER_DIR}/experiments/${MODEL}/${NAME}"
@@ -189,6 +220,9 @@ echo \"======================================\"
         echo "    Config: ${CONFIG_ABS}"
         echo "    Train:  ${TRAIN_EMB}"
         echo "    Val:    ${VAL_EMB} (${VAL_STATUS})"
+        if [ -n "$EXTRA_ARGS" ]; then
+            echo "    Extras:${EXTRA_ARGS}"
+        fi
         echo ""
     else
         mkdir -p "${CIPHER_DIR}/logs"
