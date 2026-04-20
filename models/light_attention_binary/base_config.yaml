@@ -1,0 +1,50 @@
+# LightAttentionBinary default configuration.
+#
+# Port of PPAM-TDM (ConvolutionalAttention + SimpleMLP) for K/O serotype
+# prediction. Trained with BCEWithLogitsLoss so each logit is an independent
+# per-class binary head.
+#
+# Override any of these via cipher-train CLI args.
+
+model:
+  embed_dim: 1280           # ESM-2 650M hidden size
+  pooler_cnn_width: 9       # ConvolutionalAttention kernel width
+  dropout: 0.1
+
+training:
+  batch_size: 32            # Colleague's default
+  learning_rate: 0.0005     # Colleague's default (5e-4)
+  weight_decay: 0.01
+  epochs: 200
+  patience: 30
+  grad_clip: 0.0            # Off by default (matches colleague's Lightning setup)
+  seed: 42
+  train_ratio: 0.7
+  val_ratio: 0.15
+
+data:
+  association_map: data/training_data/metadata/host_phage_protein_map.tsv
+  glycan_binders: data/training_data/metadata/glycan_binders_custom.tsv
+  embedding_type: esm2_650m_full
+  embedding_file: data/training_data/embeddings/esm2_650m_full_md5.npz
+
+validation:
+  # Paths for cipher-evaluate. Override per-environment.
+  val_fasta: data/validation_data/metadata/validation_rbps_all.faa
+  val_embedding_file: data/validation_data/embeddings/esm2_650m_full_md5.npz
+  val_datasets_dir: data/validation_data/HOST_RANGE
+
+experiment:
+  # Must be a multi-label (BCE) strategy for this model.
+  label_strategy: multi_label_threshold
+  tools: DepoScope,PhageRBPdetect
+  exclude_tools: null
+  min_sources: 1
+  min_class_samples: 25
+  min_label_count: 1
+  min_label_fraction: 0.1
+  max_samples_per_k: 1000
+  max_samples_per_o: 3000
+  max_k_types: 3
+  max_o_types: 3
+  single_label: false
