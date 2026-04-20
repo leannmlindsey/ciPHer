@@ -11,10 +11,20 @@
 #                            downsampling) — comparable to the embedding
 #                            sweep rows produced by run_embedding_sweep.sh.
 #
+# Filter-mode and clustering are controlled via env vars, matching the pattern
+# in scripts/run_embedding_sweep.sh so you can flip behavior across profiles
+# with one submission:
+#   FILTER_MODE=""             use whatever the profile's yaml specifies (default)
+#   FILTER_MODE=positive_list  override: --positive_list + clear --tools
+#   USE_CLUSTERS=0|1           add --cluster_file + --cluster_threshold
+#   CLUSTER_THRESHOLD=70       which cluster column to stratify by
+#
 # Usage:
-#   bash scripts/run_light_attention.sh                 # submit both
-#   bash scripts/run_light_attention.sh la_seg4_match_sweep
-#   DRY_RUN=1 bash scripts/run_light_attention.sh       # preview
+#   bash scripts/run_light_attention.sh                           # both profiles, yaml defaults
+#   bash scripts/run_light_attention.sh la_seg4_match_sweep       # one profile
+#   FILTER_MODE=positive_list USE_CLUSTERS=1 bash scripts/run_light_attention.sh
+#       # both profiles, overridden to positive-list + cl70 (appends _posList_cl70 to names)
+#   DRY_RUN=1 bash scripts/run_light_attention.sh                 # preview
 
 set -euo pipefail
 
@@ -44,11 +54,32 @@ GLYCAN_BINDERS="${DATA_DIR}/training_data/metadata/glycan_binders_custom.tsv"
 VAL_FASTA="${DATA_DIR}/validation_data/metadata/validation_rbps_all.faa"
 VAL_DATASETS_DIR="${DATA_DIR}/validation_data/HOST_RANGE"
 
-# Advisor's curated TSP/RBP list (used when profile name contains "_posList").
+# Advisor's curated TSP/RBP list (used when FILTER_MODE=positive_list).
 POSITIVE_LIST="${DATA_DIR}/training_data/metadata/pipeline_positive.list"
-# Sequence-cluster TSV with multi-threshold columns (used when profile name
-# contains "_cl<threshold>"); cluster_threshold picks which column to use.
+# Sequence-cluster TSV with multi-threshold columns (used when USE_CLUSTERS=1);
+# CLUSTER_THRESHOLD selects which column to stratify by.
 CLUSTER_FILE="${DATA_DIR}/training_data/metadata/candidates_clusters.tsv"
+
+# ============================================================
+# Filter-mode env vars (mirror scripts/run_embedding_sweep.sh)
+# ============================================================
+FILTER_MODE="${FILTER_MODE:-}"   # "" (use yaml as-is) or "positive_list"
+USE_CLUSTERS="${USE_CLUSTERS:-0}"
+CLUSTER_THRESHOLD="${CLUSTER_THRESHOLD:-70}"
+
+case "$FILTER_MODE" in
+    ""|positive_list) ;;
+    *) echo "ERROR: FILTER_MODE must be '' or 'positive_list', got '$FILTER_MODE'" >&2
+       exit 1 ;;
+esac
+if [[ "$FILTER_MODE" == "positive_list" && ! -f "$POSITIVE_LIST" ]]; then
+    echo "ERROR: POSITIVE_LIST not found: $POSITIVE_LIST" >&2
+    exit 1
+fi
+if [[ "$USE_CLUSTERS" == "1" && ! -f "$CLUSTER_FILE" ]]; then
+    echo "ERROR: CLUSTER_FILE not found: $CLUSTER_FILE" >&2
+    exit 1
+fi
 
 # Segments-4 embeddings (from run_embedding_sweep.sh)
 SEG4_TRAIN_EMB="/work/hdd/bfzj/llindsey1/embeddings_segments4/candidates_embeddings_segments4_md5.npz"
@@ -71,9 +102,6 @@ MODEL="light_attention"
 PROFILES=(
     "la_seg4_reproduce_old   models/light_attention/base_config.yaml   ${SEG4_TRAIN_EMB}  ${SEG4_VAL_EMB}"
     "la_seg4_match_sweep     models/light_attention/sweep_config.yaml  ${SEG4_TRAIN_EMB}  ${SEG4_VAL_EMB}"
-    # Winning config from main's attention_mlp sweep: advisor's positive list
-    # + cluster-stratified downsampling at 70% identity.
-    "la_seg4_posList_cl70    models/light_attention/sweep_config.yaml  ${SEG4_TRAIN_EMB}  ${SEG4_VAL_EMB}"
 )
 
 # ============================================================
@@ -84,8 +112,11 @@ DRY_RUN="${DRY_RUN:-0}"
 
 echo "============================================================"
 echo "LIGHT ATTENTION EXPERIMENTS"
-echo "  Model:  ${MODEL}"
-echo "  Cipher: ${CIPHER_DIR}"
+echo "  Model:       ${MODEL}"
+echo "  Cipher:      ${CIPHER_DIR}"
+echo "  Data:        ${DATA_DIR}"
+echo "  FilterMode:  ${FILTER_MODE:-<yaml default>}"
+echo "  UseClusters: ${USE_CLUSTERS} (threshold=${CLUSTER_THRESHOLD})"
 echo "============================================================"
 echo ""
 
@@ -93,35 +124,29 @@ N_SUBMITTED=0
 N_SKIPPED=0
 
 for entry in "${PROFILES[@]}"; do
-    read -r NAME CONFIG_REL TRAIN_EMB VAL_EMB <<< "$entry"
+    read -r BASE_NAME CONFIG_REL TRAIN_EMB VAL_EMB <<< "$entry"
 
-    if [ -n "$FILTER" ] && [ "$NAME" != "$FILTER" ]; then
+    if [ -n "$FILTER" ] && [ "$BASE_NAME" != "$FILTER" ]; then
         continue
     fi
 
     CONFIG_ABS="${CIPHER_DIR}/${CONFIG_REL}"
     EMB_TYPE="esm2_650m_seg4"
 
-    # Per-profile extras parsed from the profile name.
-    # - "_posList"  -> --positive_list (advisor's curated TSP/RBP list)
-    # - "_clNN"     -> --cluster_file + --cluster_threshold NN
+    # Apply filter-mode + clustering env vars. Auto-append suffixes to NAME so
+    # each variant gets its own experiment dir.
+    NAME="$BASE_NAME"
     EXTRA_ARGS=""
-    if [[ "$NAME" == *"_posList"* ]]; then
-        if [ ! -f "$POSITIVE_LIST" ]; then
-            echo "  SKIP ${NAME} — positive_list not found: ${POSITIVE_LIST}"
-            N_SKIPPED=$((N_SKIPPED + 1))
-            continue
-        fi
+    if [[ "$FILTER_MODE" == "positive_list" ]]; then
+        NAME="${NAME}_posList"
+        # apply_overrides() in train_runner.py automatically clears any
+        # tools/exclude_tools from the loaded yaml when --positive_list is
+        # set, so the mutex in TrainingConfig.__post_init__ is satisfied.
         EXTRA_ARGS="${EXTRA_ARGS} --positive_list ${POSITIVE_LIST}"
     fi
-    if [[ "$NAME" =~ _cl([0-9]+) ]]; then
-        CL_THRESH="${BASH_REMATCH[1]}"
-        if [ ! -f "$CLUSTER_FILE" ]; then
-            echo "  SKIP ${NAME} — cluster_file not found: ${CLUSTER_FILE}"
-            N_SKIPPED=$((N_SKIPPED + 1))
-            continue
-        fi
-        EXTRA_ARGS="${EXTRA_ARGS} --cluster_file ${CLUSTER_FILE} --cluster_threshold ${CL_THRESH}"
+    if [[ "$USE_CLUSTERS" == "1" ]]; then
+        NAME="${NAME}_cl${CLUSTER_THRESHOLD}"
+        EXTRA_ARGS="${EXTRA_ARGS} --cluster_file ${CLUSTER_FILE} --cluster_threshold ${CLUSTER_THRESHOLD}"
     fi
 
     # Pre-submit checks
