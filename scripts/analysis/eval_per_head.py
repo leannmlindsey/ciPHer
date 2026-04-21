@@ -39,18 +39,21 @@ def _load_predictor(run_dir):
     return module.get_predictor(os.path.abspath(run_dir))
 
 
-def _mask_head(predictor, which):
-    """Wrap predict_protein to blank out one head's probs.
+def _mask_head(original_fn, which):
+    """Wrap a saved copy of predict_protein to blank out one head's probs.
+
+    Takes the ORIGINAL predict_protein as an explicit argument so that stacking
+    (reassigning predictor.predict_protein across loop iterations) doesn't
+    cause successive wrappers to nest on top of each other.
 
     which: 'k_only'  -> blank o_probs
            'o_only'  -> blank k_probs
            'both'    -> passthrough (no mask)
     """
-    original = predictor.predict_protein
     if which == 'both':
-        return original
+        return original_fn
     def wrapped(embedding):
-        out = original(embedding)
+        out = original_fn(embedding)
         if which == 'k_only':
             out['o_probs'] = {}
         elif which == 'o_only':
@@ -97,7 +100,9 @@ def main():
     print()
 
     predictor = _load_predictor(run_dir)
-    saved_predict = predictor.predict_protein
+    # Capture the true original predict_protein once; every loop iteration
+    # wraps this (not the currently-installed wrapper) to avoid nested masking.
+    original_predict = predictor.predict_protein
 
     val_data = load_validation_data(val_fasta, val_emb_file, val_datasets_dir)
     datasets = args.datasets or val_data['available_datasets']
@@ -107,7 +112,7 @@ def main():
     # Run three passes; collect HR@k for rank_hosts and rank_phages.
     results = {}  # results[dataset][mode] = (host_hr, phage_hr, n_pairs_host, n_pairs_phage)
     for mode in ('both', 'k_only', 'o_only'):
-        predictor.predict_protein = _mask_head(predictor, mode)
+        predictor.predict_protein = _mask_head(original_predict, mode)
         for ds in ordered:
             ds_dir = os.path.join(val_datasets_dir, ds)
             if not os.path.isdir(ds_dir):
@@ -122,7 +127,7 @@ def main():
                 r['rank_hosts']['n_pairs'], r['rank_phages']['n_pairs'])
 
     # Restore original predict_protein
-    predictor.predict_protein = saved_predict
+    predictor.predict_protein = original_predict
 
     # Print tables
     for metric_idx, metric_name in ((0, 'host HR@%d' % args.k),
