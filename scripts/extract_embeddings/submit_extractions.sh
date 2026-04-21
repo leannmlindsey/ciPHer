@@ -82,9 +82,22 @@ EXTRACTIONS=(
     "prott5  Rostlab/prot_t5_xl_uniref50    segments8   128G  1  12:00:00  --half_precision --max_length 3000"
     "prott5  Rostlab/prot_t5_xl_uniref50    segments16  128G  1  12:00:00  --half_precision --max_length 3000"
 
+    # ProtT5-XL per-residue (full) output for the Light Attention experiments.
+    # Required input shape for LA when it operates on residue-level features.
+    # Storage: ~145 GB at fp16. Single GPU, 18h wall clock is generous given
+    # that seg16 on the same model took 2h15.
+    "prott5  Rostlab/prot_t5_xl_uniref50    full        128G  1  18:00:00  --half_precision --max_length 3000"
+
     # ProtT5-XXL mean (11B params — does size help for ProtT5?).
     # Half precision required to fit on a single H100. max_length guard too.
     "prott5  Rostlab/prot_t5_xxl_uniref50   mean        0     4  24:00:00  --half_precision --max_length 3000"
+
+    # ProtT5-XXL full — commented out as a hedge. Uncomment and submit only
+    # if the XXL mean K-type separation gap comes back larger than XL mean
+    # (currently 0.031). Prior evidence from ESM-2 (gap monotonically
+    # decreased with scale) suggests this may not pay off; wait for the
+    # XXL mean result before committing the 24+ hour extraction.
+    # "prott5  Rostlab/prot_t5_xxl_uniref50   full        0     4  48:00:00  --half_precision --max_length 3000"
 )
 
 FILTER="${1:-}"
