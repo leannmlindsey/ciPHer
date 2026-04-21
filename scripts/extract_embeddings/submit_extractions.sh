@@ -23,8 +23,19 @@ set -euo pipefail
 # ============================================================
 ACCOUNT="bfzj-dtai-gh"
 PARTITION="ghx4"
-CONDA_ENV="${CONDA_ENV:-esmfold2}"
+# Per-family conda envs (override with family-specific env vars).
+# esmfold2 has torch + fair-esm; prott5 has torch + transformers.
+ESM2_ENV="${ESM2_ENV:-esmfold2}"
+PROTT5_ENV="${PROTT5_ENV:-prott5}"
 CIPHER_DIR="/projects/bfzj/llindsey1/PHI_TSP/ciPHer"
+
+family_env() {
+    case "$1" in
+        esm2)   echo "$ESM2_ENV" ;;
+        prott5) echo "$PROTT5_ENV" ;;
+        *)      echo "ERROR: unknown family '$1'" >&2; exit 1 ;;
+    esac
+}
 
 TRAIN_FASTA="${CIPHER_DIR}/data/training_data/metadata/candidates.faa"
 VAL_FASTA="${CIPHER_DIR}/data/validation_data/metadata/validation_rbps_all.faa"
@@ -126,6 +137,7 @@ build_and_submit() {
             ;;
     esac
 
+    local conda_env=$(family_env "$family")
     local cmd="python ${extract_py} ${fasta} ${output_npz} ${model_arg} ${pooling_arg} --key_by_md5 ${extra_py_args}"
 
     local job_script="#!/bin/bash
@@ -142,7 +154,7 @@ build_and_submit() {
 set -euo pipefail
 
 source \$(conda info --base)/etc/profile.d/conda.sh
-conda activate ${CONDA_ENV}
+conda activate ${conda_env}
 cd ${CIPHER_DIR}
 export PYTHONPATH=${CIPHER_DIR}/src:\${PYTHONPATH:-}
 export TORCH_HOME=/projects/bfzj/llindsey1/RBP_Structural_Similarity/models
