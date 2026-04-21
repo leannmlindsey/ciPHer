@@ -695,6 +695,43 @@ The CSV is rebuilt idempotently from `experiment.json` and
 `results/evaluation.json` in each run directory, so it is safe to
 regenerate after additional experiments complete.
 
+#### Aggregating across worktrees
+
+When multiple contributors are developing in parallel git worktrees
+(for example, `cipher-light_attention/` and `cipher-contrastive_encoder/`
+as siblings of the main `cipher/` checkout), each worktree accumulates
+its own `experiments/` directory. Pass all of them to
+`harvest_results.py` via the `--experiments-dirs` flag so the output
+CSV spans every worktree:
+
+```bash
+# Explicit list of experiments roots:
+python scripts/analysis/harvest_results.py --experiments-dirs \
+    experiments \
+    /u/llindsey1/llindsey/PHI_TSP/cipher-light-attention/experiments \
+    /u/llindsey1/llindsey/PHI_TSP/cipher-light-attention-binary/experiments
+
+# Or use shell globbing to auto-discover every sibling worktree:
+python scripts/analysis/harvest_results.py --experiments-dirs \
+    experiments ../cipher-*/experiments
+
+# Explicit label=path syntax to control the source column in the CSV:
+python scripts/analysis/harvest_results.py --experiments-dirs \
+    main=experiments la=../cipher-light-attention/experiments
+```
+
+The flag accepts any number of directories. When labels are not supplied
+explicitly, each entry is auto-tagged with the name of its parent
+directory (e.g. a path `../cipher-light-attention/experiments`
+produces source label `cipher-light-attention`). The resulting CSV
+contains two worktree-aware columns:
+
+- `source` — the worktree label
+- `exp_dir` — the full path to the run directory
+
+so runs from different worktrees can be distinguished unambiguously,
+even if run names collide.
+
 ### Representation diagnostics (PHL ceiling investigation)
 
 | Script | Measures | Output |
