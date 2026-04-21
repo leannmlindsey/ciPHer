@@ -40,6 +40,35 @@ _SUPPORTED_STRATEGIES = {
 }
 
 
+def check_embedding_coverage(split_md5s, emb_dict, min_coverage,
+                             split_name, emb_file):
+    """Raise ValueError if fewer than `min_coverage` of split_md5s have
+    embeddings in emb_dict. Returns the list of MD5s that DO have
+    embeddings. Silently returns an empty list if split_md5s is empty.
+
+    This guard catches the 14%-coverage failure mode: train.py previously
+    would silently drop ~85% of the planned training set when the embedding
+    file was partial (see 2026-04-21 notebook entry).
+    """
+    n_expected = len(split_md5s)
+    valid = [m for m in split_md5s if m in emb_dict]
+    n_valid = len(valid)
+    coverage = n_valid / n_expected if n_expected > 0 else 0.0
+    print(f'  {split_name}: {n_valid}/{n_expected} MD5s have embeddings '
+          f'({coverage:.1%})')
+    if n_expected > 0 and coverage < min_coverage:
+        raise ValueError(
+            f'Embedding coverage too low for split {split_name!r}: '
+            f'{n_valid}/{n_expected} = {coverage:.1%} < '
+            f'{min_coverage:.0%}. The embedding file at {emb_file} is '
+            f'missing most of the filtered training set. Re-extract '
+            f'embeddings for the full candidates set, or lower '
+            f'training.min_embedding_coverage in the config to '
+            f'acknowledge the gap.'
+        )
+    return valid
+
+
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -350,8 +379,17 @@ def train(experiment_dir, config):
     emb_dict = load_embeddings(emb_file, md5_filter=md5_set)
     print(f'  Loaded {len(emb_dict)} embeddings from {emb_file}')
 
-    def build_arrays(split_md5s, labels):
-        valid = [m for m in split_md5s if m in emb_dict and m in md5_to_idx_full]
+    # Hard-fail if the embedding file doesn't cover at least this fraction
+    # of each split. Prevents silently training on 14% of the intended set
+    # (see 2026-04-21 notebook entry). Set to 0 to disable.
+    min_coverage = float(train_cfg.get('min_embedding_coverage', 0.5))
+
+    def build_arrays(split_md5s, labels, split_name):
+        valid = check_embedding_coverage(
+            split_md5s, emb_dict, min_coverage, split_name, emb_file)
+        # Drop anything not in md5_to_idx_full (should be impossible by
+        # construction of splits, but keeps the indexing safe).
+        valid = [m for m in valid if m in md5_to_idx_full]
         X = [emb_dict[m] for m in valid]
         idxs = [md5_to_idx_full[m] for m in valid]
         y = labels[idxs]
@@ -359,17 +397,17 @@ def train(experiment_dir, config):
 
     print('\nStep 4: Training K head...')
     set_seed(seed)
-    X_train_k, y_train_k = build_arrays(splits_k['train'], td.k_labels)
-    X_val_k, y_val_k = build_arrays(splits_k['val'], td.k_labels)
-    X_test_k, y_test_k = build_arrays(splits_k['test'], td.k_labels)
+    X_train_k, y_train_k = build_arrays(splits_k['train'], td.k_labels, 'k/train')
+    X_val_k, y_val_k = build_arrays(splits_k['val'], td.k_labels, 'k/val')
+    X_test_k, y_test_k = build_arrays(splits_k['test'], td.k_labels, 'k/test')
     train_head('k', X_train_k, y_train_k, X_val_k, y_val_k, X_test_k, y_test_k,
                td.k_classes, config, os.path.join(experiment_dir, 'model_k'))
 
     print('\nStep 5: Training O head...')
     set_seed(seed)
-    X_train_o, y_train_o = build_arrays(splits_o['train'], td.o_labels)
-    X_val_o, y_val_o = build_arrays(splits_o['val'], td.o_labels)
-    X_test_o, y_test_o = build_arrays(splits_o['test'], td.o_labels)
+    X_train_o, y_train_o = build_arrays(splits_o['train'], td.o_labels, 'o/train')
+    X_val_o, y_val_o = build_arrays(splits_o['val'], td.o_labels, 'o/val')
+    X_test_o, y_test_o = build_arrays(splits_o['test'], td.o_labels, 'o/test')
     train_head('o', X_train_o, y_train_o, X_val_o, y_val_o, X_test_o, y_test_o,
                td.o_classes, config, os.path.join(experiment_dir, 'model_o'))
 

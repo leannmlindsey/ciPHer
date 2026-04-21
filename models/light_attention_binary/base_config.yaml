@@ -21,6 +21,9 @@ training:
   seed: 42
   train_ratio: 0.7
   val_ratio: 0.15
+  # Hard-fail the training job if fewer than this fraction of the filtered
+  # MD5s have embeddings in the provided NPZ. Set to 0 to disable.
+  min_embedding_coverage: 0.5
 
 data:
   association_map: data/training_data/metadata/host_phage_protein_map.tsv

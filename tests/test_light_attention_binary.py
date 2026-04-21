@@ -28,6 +28,7 @@ from model import (  # noqa: E402
     bce_loss,
 )
 from predict import LightAttentionBinaryPredictor  # noqa: E402
+from train import check_embedding_coverage  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -235,3 +236,52 @@ class TestPredictor:
     def test_embedding_type_property(self):
         pred = self._build_predictor()
         assert pred.embedding_type == 'esm2_650m_full'
+
+
+# ---------------------------------------------------------------------------
+# check_embedding_coverage (data-loader guard)
+# ---------------------------------------------------------------------------
+
+class TestEmbeddingCoverageGuard:
+    def test_full_coverage_returns_all(self):
+        md5s = ['a', 'b', 'c', 'd']
+        emb = {m: np.zeros((5, 8)) for m in md5s}
+        valid = check_embedding_coverage(md5s, emb, 0.5, 'k/train', '/fake.npz')
+        assert valid == md5s
+
+    def test_just_above_threshold_passes(self):
+        md5s = ['a', 'b', 'c', 'd']
+        emb = {'a': np.zeros((5, 8)), 'b': np.zeros((5, 8)),
+               'c': np.zeros((5, 8))}  # 75% coverage
+        valid = check_embedding_coverage(md5s, emb, 0.5, 'k/train', '/fake.npz')
+        assert set(valid) == {'a', 'b', 'c'}
+
+    def test_below_threshold_raises(self):
+        """Recreates the 14%-coverage failure we hit 2026-04-21."""
+        md5s = [f'm{i}' for i in range(100)]
+        emb = {f'm{i}': np.zeros((5, 8)) for i in range(14)}  # 14% coverage
+        with pytest.raises(ValueError, match='Embedding coverage too low'):
+            check_embedding_coverage(md5s, emb, 0.5, 'k/train', '/fake.npz')
+
+    def test_error_message_includes_counts_and_path(self):
+        md5s = [f'm{i}' for i in range(10)]
+        emb = {'m0': np.zeros((5, 8))}
+        with pytest.raises(ValueError) as exc:
+            check_embedding_coverage(md5s, emb, 0.5, 'o/train',
+                                     '/some/embeddings.npz')
+        msg = str(exc.value)
+        assert 'o/train' in msg
+        assert '1/10' in msg
+        assert '/some/embeddings.npz' in msg
+
+    def test_empty_split_does_not_raise(self):
+        """Empty val/test splits shouldn't trip the guard — coverage
+        calculation is 0/0 which we treat as pass-through."""
+        valid = check_embedding_coverage([], {}, 0.5, 'k/val', '/fake.npz')
+        assert valid == []
+
+    def test_threshold_zero_disables_guard(self):
+        """Setting min_coverage=0 should pass even with empty emb_dict."""
+        md5s = ['a', 'b', 'c']
+        valid = check_embedding_coverage(md5s, {}, 0.0, 'k/train', '/fake.npz')
+        assert valid == []
