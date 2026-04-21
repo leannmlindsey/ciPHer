@@ -504,16 +504,30 @@ probability mass to compete between classes.
 
 ### Provenance
 
-Every trained run captures at training time:
+Every trained run captures the following metadata at training time:
 
-- `git_commit`, `git_dirty`
-- `host`, `slurm_job_id`, `user`
-- `cli_argv` (full command)
-- `timestamp`
+| Field | Description |
+|---|---|
+| `git_commit` | Short SHA of `HEAD` at the moment `cipher-train` was launched. |
+| `git_dirty` | Boolean. `True` if `git status --porcelain` returned non-empty output, i.e. the working tree contained uncommitted modifications, staged-but-unclosed changes, or untracked files that could have influenced the run. `False` indicates the working tree matched `git_commit` exactly. |
+| `host` | Hostname of the machine executing the run (login node, compute node, or laptop). |
+| `slurm_job_id` | SLURM job identifier when run under `sbatch`; empty otherwise. |
+| `user` | Invoking user (from `$USER`). |
+| `cli_argv` | Full command line as received by the process, including all CLI flags. |
+| `timestamp` | ISO-formatted start time. |
 
 These fields are stored under `experiment.json["provenance"]`. To
 reproduce a given run, check out the recorded `git_commit`, restore the
 saved `config.yaml`, and rerun `cipher-train` with the same `--name`.
+
+**Reproducibility caveat.** When `git_dirty == True`, the recorded
+`git_commit` hash is only an approximation of the code state: there were
+uncommitted local modifications at training time that cannot be
+recovered from version control alone. Runs intended for publication or
+permanent record should be executed from a clean working tree
+(`git_dirty == False`). When inspecting historical runs, treat
+`git_dirty == True` as a flag that the run may be imperfectly
+reproducible from its commit hash.
 
 ---
 
@@ -533,10 +547,8 @@ cipher-evaluate experiments/{model}/{run_name}/ \
     --val-embedding-file-2 /path/to/val_kmer.npz
 ```
 
-Runs both ranking modes against five validation datasets (CHEN,
-GORODNICHIV, UCSD, PBIP, and PhageHostLearn). KlebPhaCol is excluded
-because its proteins are not capsular-interacting and therefore do not
-test the property ciPHer is designed to predict.
+Runs both ranking modes against five validation datasets: CHEN,
+GORODNICHIV, UCSD, PBIP, and PhageHostLearn.
 
 - **Rank hosts given phage** — for each phage, score all candidate hosts
 - **Rank phages given host** — for each host, score all candidate phages
@@ -783,7 +795,7 @@ accompanying sha256 manifest:
 ```bash
 bash scripts/utils/package_data.sh
 # -> dist/cipher_training_data.zip   (raw inputs: FASTA, TSVs, cluster file)
-# -> dist/cipher_validation_data.zip (5 validation datasets; KlebPhaCol excluded)
+# -> dist/cipher_validation_data.zip (5 validation datasets)
 ```
 
 Each archive contains a `MANIFEST.txt` file enabling byte-level
@@ -796,14 +808,77 @@ regenerated from source FASTAs using the scripts under
 
 ## Testing
 
-```bash
-pytest           # full suite
-pytest -v        # verbose
-pytest -x        # stop on first failure
+The project ships with a comprehensive `pytest` suite (111 tests across
+nine modules) covering the data-preparation pipeline, evaluation
+primitives, and model-specific components. All tests execute in under
+two seconds on a modern laptop and require no GPU.
 
-# Run one target file
-pytest tests/test_contrastive_sampler.py -v
+### Running the suite
+
+```bash
+pytest                                              # full suite (111 tests)
+pytest -v                                           # per-test output
+pytest -x                                           # stop on first failure
+pytest -k "sampler"                                 # filter by name substring
+pytest --collect-only -q                            # list all tests without executing
+pytest tests/test_contrastive_sampler.py -v         # run one module
+pytest tests/test_training.py::TestClusterStratifiedSample  # run one test class
 ```
+
+### Coverage
+
+| Test module | Tests | What it verifies |
+|---|---:|---|
+| `test_training.py` | 43 | `TrainingConfig` construction and deprecation paths; `prepare_training_data` filtering (tools, positive_list, min_sources); multi-label / single-label / threshold label building; downsampling (including cluster-stratified); `min_class_samples` enforcement; weighted-soft label arithmetic. |
+| `test_metrics.py` | 13 | `hr_at_k`, `mrr`, and `hr_curve` under ordinary and edge-case inputs (empty ranks, ties, k larger than candidate pool). |
+| `test_analysis.py` | 11 | Per-serotype analysis helpers used by the diagnostic scripts under `scripts/analysis/`. |
+| `test_contrastive_sampler.py` | 11 | `PKClusterSampler` batch shape, class balance, cluster stratification, usable-class filtering (strict and non-strict), determinism under fixed seed, and degenerate inputs. |
+| `test_predictor.py` | 8 | `Predictor.score_pair` z-score normalization across K and O heads; tie behavior; handling of missing predictions. |
+| `test_serotypes.py` | 8 | Serotype parsing: null handling, K-type short-form normalization, and identity preservation for already-normalized labels. |
+| `test_ranking.py` | 7 | Host and phage ranking under competition tie-handling and arbitrary-order tie-handling. |
+| `test_splits.py` | 6 | Stratified train/val/test split behavior, including minority-class preservation and deterministic seeding. |
+| `test_embeddings.py` | 4 | `load_embeddings_concat` coverage-mismatch error, MD5 filtering, ordering of concatenated vectors, and correct dimensionality. |
+
+### Test fixtures
+
+Small synthetic fixtures are stored under `tests/test_data/`:
+
+- `association_map.tsv` — a minimal `host_phage_protein_map.tsv` covering
+  a handful of phages, proteins, and K/O serotypes.
+- `glycan_binders.tsv` — the matching tool-flag table.
+
+These fixtures support end-to-end tests of `prepare_training_data`
+without requiring access to the full training corpus. The fixtures are
+designed to exercise filter edge cases (rare classes, null serotypes,
+proteins missing from either file) rather than to reflect production
+data.
+
+### Adding a new test
+
+Test modules follow the `tests/test_*.py` naming convention and use
+standard `pytest` discovery. New tests should:
+
+1. Be placed in an existing module when the subject area matches, or in
+   a new `tests/test_<subject>.py` file otherwise.
+2. Use fixtures from `tests/test_data/` where possible; add new
+   fixtures only when the required data cannot be constructed
+   programmatically inside the test.
+3. Run in under one second per test and require no network or GPU
+   access.
+4. Be deterministic — seed any random number generator explicitly.
+
+### Continuous integration
+
+Before committing changes to `src/cipher/`, the shared library, run the
+full suite:
+
+```bash
+pytest
+```
+
+Any commit that modifies the shared library is expected to leave the
+suite passing. Model-specific changes (under `models/{name}/`) should
+additionally pass any model-specific tests in `tests/`.
 
 ## References
 
