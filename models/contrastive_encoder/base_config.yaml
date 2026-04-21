@@ -1,0 +1,72 @@
+# Contrastive encoder — default config.
+# Learns an encoder z = f(x) over ESM-2 (or other) embeddings using
+# ArcFace angular-margin loss on K-type and O-type. At the end of training
+# the encoder is applied to the full training + validation NPZs to produce
+# drop-in replacement files for downstream classifiers.
+
+model:
+  # Backbone MLP. Output dim is kept at 1280 so the generated NPZ is a
+  # drop-in replacement for ESM-2 650M.
+  hidden_dims: [1280, 1024, 1024]
+  output_dim: 1280
+  dropout: 0.1
+
+arcface:
+  # Additive angular margin and scale. Face-recognition-style defaults.
+  # margin 0.5 rad ≈ 28.6 degrees. scale 30 sharpens the softmax.
+  margin: 0.5
+  scale: 30.0
+
+training:
+  # batch_size is sampler.P * sampler.K (32 * 8 = 256)
+  batch_size: 256
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  epochs: 100
+  patience: 20
+  seed: 42
+  # Internal train/val split for early stopping on cosine-gap metric.
+  # No test split — evaluation is downstream on the attention_mlp run.
+  train_ratio: 0.85
+  val_ratio: 0.15
+  # Loss weights (set 0 to disable a head)
+  lambda_k: 1.0
+  lambda_o: 1.0
+
+sampler:
+  # Each batch = P K-types × K samples per K-type, cluster-stratified.
+  P: 32
+  K: 8
+  # null means "as many batches as fit one pass over training samples".
+  num_batches_per_epoch: null
+
+data:
+  association_map: data/training_data/metadata/host_phage_protein_map.tsv
+  glycan_binders: data/training_data/metadata/glycan_binders_custom.tsv
+  embedding_type: esm2_650m
+  embedding_file: data/training_data/embeddings/esm2_650m_md5.npz
+
+validation:
+  # Downstream-validation NPZ — the encoder is applied to these at the end
+  # and a drop-in replacement NPZ is written into the experiment dir.
+  val_fasta: data/validation_data/metadata/validation_rbps_all.faa
+  val_embedding_file: data/validation_data/embeddings/esm2_650m_md5.npz
+  val_datasets_dir: data/validation_data/HOST_RANGE
+
+experiment:
+  # Reuses cipher.data.prepare_training_data filtering. Defaults roughly
+  # match the posList + cl70 sweep winner, since that's the training-set
+  # regime we want the encoder to learn from.
+  tools: null
+  exclude_tools: null
+  positive_list_path: null
+  min_sources: 1
+  min_class_samples: 25
+  max_samples_per_k: 1000
+  max_samples_per_o: 3000
+  label_strategy: multi_label_threshold
+  min_label_count: 1
+  min_label_fraction: 0.1
+  single_label: false
+  cluster_file_path: null
+  cluster_threshold: 70

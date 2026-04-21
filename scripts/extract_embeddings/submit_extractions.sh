@@ -65,6 +65,14 @@ EXTRACTIONS=(
     # "esm2    esm2_t33_650M_UR50D            segments8   64G   1  12:00:00  -"
     # "esm2    esm2_t33_650M_UR50D            segments16  64G   1  12:00:00  -"
 
+    # ESM-2 650M per-residue (full) — needed for light_attention_binary and
+    # the light-attention models, which pool attention across all residues.
+    # The existing file at /work/hdd/.../embeddings_full/ covered only 4453
+    # MD5s (see 2026-04-21 training run: model trained on 14% of the filtered
+    # set). mem=0 because the extraction holds all (L, 1280) arrays in a dict
+    # before np.savez_compressed — ~60-80 GB RAM for the full candidates set.
+    "esm2    esm2_t33_650M_UR50D            full        0     1  24:00:00  -"
+
     # ProtT5-XL segmented pooling (tests whether ProtT5's K-type signal
     # amplifies with local pooling — ESM-2 seg4 bumped top-1 match 11.3 -> 12.6).
     # --half_precision halves model VRAM; --max_length 3000 caps the attention
