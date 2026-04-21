@@ -122,6 +122,11 @@ def main():
                         help="Pooling strategy: 'mean' (default, D-dim output) "
                              "or 'segmentsN' for any N>=2 (N*D-dim output). "
                              "Example: --pooling segments4")
+    parser.add_argument("--checkpoint_every", type=int, default=2000,
+                        help="Save a .partial.npz checkpoint every N sequences "
+                             "so a late crash doesn't lose hours of work. "
+                             "On restart, existing keys in the partial file "
+                             "are skipped. Set to 0 to disable (default: 2000).")
     args = parser.parse_args()
 
     # Validate pooling early
@@ -176,9 +181,22 @@ def main():
 
     # Process in batches
     print(f"\nGenerating embeddings (batch_size={args.batch_size})...")
+
+    # Resume support: load any pre-existing partial checkpoint and skip
+    # keys we already have.
+    partial_path = args.output_npz + ".partial.npz"
     embeddings_dict = {}
-    seen_md5s = set()
+    if os.path.exists(partial_path):
+        print(f"  Resuming from checkpoint: {partial_path}")
+        prev = np.load(partial_path)
+        for k in prev.files:
+            embeddings_dict[k] = prev[k]
+        print(f"  Loaded {len(embeddings_dict):,} pre-existing embeddings")
+
+    seen_md5s = set(embeddings_dict.keys()) if args.key_by_md5 else set()
     skipped_duplicates = 0
+    since_last_checkpoint = 0
+    oom_skipped = 0
 
     # ProtT5 expects spaces between amino acids
     def prepare_sequence(seq, max_length=None):
@@ -216,32 +234,70 @@ def main():
         if not batch_seqs:
             continue
 
-        # Tokenize
-        ids = tokenizer.batch_encode_plus(
-            batch_seqs,
-            add_special_tokens=True,
-            padding="longest",
-            return_tensors="pt",
-        )
+        # Skip anything already in the (resumed) dict.
+        pending = [(sid, seq, key) for sid, seq, key in zip(batch_ids, batch_seqs, batch_keys)
+                   if key not in embeddings_dict]
+        if not pending:
+            continue
+        cur_ids = [p[0] for p in pending]
+        cur_seqs = [p[1] for p in pending]
+        cur_keys = [p[2] for p in pending]
 
-        input_ids = ids["input_ids"].to(device)
-        attention_mask = ids["attention_mask"].to(device)
+        # Encode with an OOM-aware retry ladder: full batch → batch_size 1 → skip.
+        def _run(seqs):
+            ids = tokenizer.batch_encode_plus(
+                seqs, add_special_tokens=True, padding="longest",
+                return_tensors="pt")
+            input_ids = ids["input_ids"].to(device)
+            attention_mask = ids["attention_mask"].to(device)
+            with torch.no_grad():
+                out = model(input_ids=input_ids, attention_mask=attention_mask)
+            return out.last_hidden_state, attention_mask
 
-        # Generate embeddings
-        with torch.no_grad():
-            results = model(input_ids=input_ids, attention_mask=attention_mask)
-            # results.last_hidden_state: (batch, seq_len, 1024)
-            hidden_states = results.last_hidden_state
+        try:
+            hidden_states, attention_mask = _run(cur_seqs)
+            process_seqs = cur_seqs
+            process_keys = cur_keys
+        except torch.cuda.OutOfMemoryError:
+            # Batch OOM — fall back to per-sequence, skipping any that still OOM.
+            torch.cuda.empty_cache()
+            hidden_states = None  # signal fallback path below
+            fallback_results = []
+            for sid, seq, key in zip(cur_ids, cur_seqs, cur_keys):
+                try:
+                    h, am = _run([seq])
+                    fallback_results.append((key, h[0], am[0]))
+                except torch.cuda.OutOfMemoryError:
+                    torch.cuda.empty_cache()
+                    print(f"\n  OOM on single sequence ({sid}, len={len(seq.replace(' ',''))}); skipping",
+                          file=sys.stderr)
+                    oom_skipped += 1
+            # Pool directly from the fallback list
+            for key, h, am in fallback_results:
+                seq_len = int(am.sum().item())
+                residues = h[:seq_len - 1, :]
+                emb = pool_residue_embeddings(residues, args.pooling)
+                if args.half_precision:
+                    emb = emb.float()
+                embeddings_dict[key] = emb.cpu().numpy()
+                since_last_checkpoint += 1
 
-        # Pool (excluding padding + EOS)
-        for i in range(len(batch_keys)):
-            seq_len = attention_mask[i].sum().item()
-            # Exclude special tokens: take [0:seq_len-1] to skip EOS
-            residues = hidden_states[i, :int(seq_len) - 1, :]
-            emb = pool_residue_embeddings(residues, args.pooling)
-            if args.half_precision:
-                emb = emb.float()  # convert back to float32 for storage
-            embeddings_dict[batch_keys[i]] = emb.cpu().numpy()
+        if hidden_states is not None:
+            # Normal path: pool full batch
+            for i in range(len(cur_keys)):
+                seq_len = attention_mask[i].sum().item()
+                residues = hidden_states[i, :int(seq_len) - 1, :]
+                emb = pool_residue_embeddings(residues, args.pooling)
+                if args.half_precision:
+                    emb = emb.float()
+                embeddings_dict[cur_keys[i]] = emb.cpu().numpy()
+                since_last_checkpoint += 1
+
+        # Periodic checkpoint write
+        if args.checkpoint_every and since_last_checkpoint >= args.checkpoint_every:
+            os.makedirs(os.path.dirname(partial_path) or ".", exist_ok=True)
+            np.savez(partial_path, **embeddings_dict)
+            since_last_checkpoint = 0
 
         # Update progress bar
         pbar.set_postfix({
@@ -255,6 +311,8 @@ def main():
     print(f"  Embedded: {len(embeddings_dict):,} sequences")
     if args.key_by_md5:
         print(f"  Skipped duplicates: {skipped_duplicates:,}")
+    if oom_skipped:
+        print(f"  OOM-skipped sequences: {oom_skipped:,}")
 
     # Verify dimensions
     first_key = next(iter(embeddings_dict))
@@ -265,6 +323,10 @@ def main():
     print(f"\nSaving to {args.output_npz}...")
     os.makedirs(os.path.dirname(args.output_npz) or ".", exist_ok=True)
     np.savez_compressed(args.output_npz, **embeddings_dict)
+
+    # Remove partial checkpoint now that the final output is written.
+    if os.path.exists(partial_path):
+        os.remove(partial_path)
 
     # Verify
     verify = np.load(args.output_npz)

@@ -67,13 +67,16 @@ EXTRACTIONS=(
 
     # ProtT5-XL segmented pooling (tests whether ProtT5's K-type signal
     # amplifies with local pooling — ESM-2 seg4 bumped top-1 match 11.3 -> 12.6).
-    "prott5  Rostlab/prot_t5_xl_uniref50    segments4   128G  1  12:00:00  -"
-    "prott5  Rostlab/prot_t5_xl_uniref50    segments8   128G  1  12:00:00  -"
-    "prott5  Rostlab/prot_t5_xl_uniref50    segments16  128G  1  12:00:00  -"
+    # --half_precision halves model VRAM; --max_length 3000 caps the attention
+    # matrix for a small number of very-long sequences (>4000 aa) that OOM'd
+    # the H100 on the first attempt near the tail of the length-sorted FASTA.
+    "prott5  Rostlab/prot_t5_xl_uniref50    segments4   128G  1  12:00:00  --half_precision --max_length 3000"
+    "prott5  Rostlab/prot_t5_xl_uniref50    segments8   128G  1  12:00:00  --half_precision --max_length 3000"
+    "prott5  Rostlab/prot_t5_xl_uniref50    segments16  128G  1  12:00:00  --half_precision --max_length 3000"
 
     # ProtT5-XXL mean (11B params — does size help for ProtT5?).
-    # Half precision required to fit on a single H100.
-    "prott5  Rostlab/prot_t5_xxl_uniref50   mean        0     4  24:00:00  --half_precision"
+    # Half precision required to fit on a single H100. max_length guard too.
+    "prott5  Rostlab/prot_t5_xxl_uniref50   mean        0     4  24:00:00  --half_precision --max_length 3000"
 )
 
 FILTER="${1:-}"
