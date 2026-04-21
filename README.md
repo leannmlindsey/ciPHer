@@ -78,8 +78,9 @@ cipher/
    with `predict_protein(embedding)` returning `{'k_probs': {...}, 'o_probs': {...}}`.
    Evaluation code never needs to know model internals.
 3. **No data duplication.** Experiment configs control data filtering
-   (protein set, min_sources, downsampling, cluster stratification). Heavy
-   data files live once in `data/` and ship together in `dist/*.zip`.
+   (protein set, min_sources, downsampling, cluster stratification). Large
+   input files are stored in a single canonical location under `data/` and
+   are distributed together in `dist/*.zip`.
 4. **Reproducible.** Every run records git commit, host, SLURM job id, user,
    and full command line via `cipher.provenance.capture_provenance()`.
 
@@ -90,7 +91,7 @@ cipher/
 | Module | Key Functions | Purpose |
 |---|---|---|
 | `training.py` | `prepare_training_data(config, assoc_path, glycan_path)` | Full filtering + labeling pipeline. Returns `TrainingData`. |
-| `training.py` | `TrainingConfig` | Dataclass for all filtering knobs (tools, positive_list, min_sources, cluster_file, downsampling). |
+| `training.py` | `TrainingConfig` | Dataclass containing all filtering parameters (tools, positive_list, min_sources, cluster_file, downsampling). |
 | `embeddings.py` | `load_embeddings(path, md5_filter=None)` | Load NPZ embeddings, optionally filtered. |
 | `embeddings.py` | `load_embeddings_concat(p1, p2, md5_filter)` | Load two NPZs and concatenate per MD5 (requires full coverage). |
 | `interactions.py` | `load_interaction_matrix(dataset_dir)` | Validation interactions as `{phage: {host: label}}`. |
@@ -141,14 +142,16 @@ cipher-evaluate experiments/attention_mlp/{run_name}/
 
 ## Available models
 
-Each model sits under `models/{name}/` with the same four files: `base_config.yaml`,
-`model.py`, `train.py`, `predict.py`. `cipher-train --model {name}` dynamically
-loads `models/{name}/train.py::train(experiment_dir, config)`.
+Each model is implemented in `models/{name}/` and contains four files:
+`base_config.yaml`, `model.py`, `train.py`, and `predict.py`.
+`cipher-train --model {name}` dynamically loads
+`models/{name}/train.py::train(experiment_dir, config)`.
 
 ### `attention_mlp` — Baseline classifier
 
-The default model. Two independent classifiers (K-type, O-type) trained in
-sequence on top of pre-extracted protein embeddings.
+The default classifier, provided as a baseline. Two independent classifiers
+(one for K-type and one for O-type) are trained sequentially on pre-extracted
+protein embeddings.
 
 #### Architecture
 
@@ -164,33 +167,34 @@ Input embedding (e.g. 1280-d ESM-2 650M)
     └─▶ Output head: Linear(160, n_classes)    # n_classes = number of K- or O-types
 ```
 
-Two instances of this network are trained independently — one for K-type
-classification, one for O-type. At evaluation time their probabilities are
-z-scored per protein and max-pooled across a phage's RBPs for the final
-score.
+Two instances of this network are trained independently: one for K-type
+classification and one for O-type. At evaluation time their class
+probabilities are z-scored per protein and max-pooled across the receptor
+binding proteins of each phage to produce the final score.
 
 #### Key hyperparameters (`models/attention_mlp/base_config.yaml`)
 
-| Knob | Default | Meaning |
+| Parameter | Default | Description |
 |---|---|---|
 | `model.hidden_dims` | `[1280, 640, 320, 160]` | MLP layer widths (post-attention) |
-| `model.attention_dim` | `640` | SE bottleneck dim. Set 0 to disable attention. |
-| `model.dropout` | `0.1` | Dropout on each hidden layer |
+| `model.attention_dim` | `640` | SE bottleneck dimension; set to 0 to disable attention |
+| `model.dropout` | `0.1` | Dropout applied after each hidden layer |
 | `training.batch_size` | `64` | — |
-| `training.learning_rate` | `1e-5` | AdamW |
-| `training.epochs` | `200` | Max epochs |
-| `training.patience` | `30` | Early-stop patience (on val micro-F1) |
+| `training.learning_rate` | `1e-5` | AdamW optimizer |
+| `training.epochs` | `200` | Maximum training epochs |
+| `training.patience` | `30` | Early-stopping patience (monitored on validation micro-F1) |
 
-Loss depends on `label_strategy` (see [Label strategies](#label-strategies)):
-`single_label` uses softmax + cross-entropy; all `multi_label*` strategies
+The loss function is determined by `label_strategy` (see [Label strategies](#label-strategies)):
+`single_label` uses softmax with cross-entropy; all `multi_label*` strategies
 use BCE with per-class positive-weight scaling.
 
 #### How to run
 
 ```bash
-# Baseline: DepoScope + PhageRBPdetect proteins, multi-label with threshold
+# Recommended baseline: DepoScope + PhageRBPdetect + SpikeHunter,
+# multi-label threshold strategy.
 cipher-train --model attention_mlp \
-    --tools DepoScope,PhageRBPdetect \
+    --tools DepoScope,PhageRBPdetect,SpikeHunter \
     --label_strategy multi_label_threshold \
     --min_class_samples 25 \
     --max_samples_per_k 1000 --max_samples_per_o 3000
@@ -217,10 +221,11 @@ cipher-train --model attention_mlp \
     --val_embedding_file_2 /path/to/val_kmer_aa20_k4.npz
 ```
 
-With `--embedding_file_2` set, features become `concatenate([vec_1, vec_2])`
-per MD5. Every MD5 must be present in both files — a coverage mismatch
-raises an error. Evaluation picks up the second file from saved `config.yaml`
-automatically, or pass `--val-embedding-file-2` to override.
+When `--embedding_file_2` is set, the per-MD5 feature vector becomes
+`concatenate([vec_1, vec_2])`. Every MD5 must be present in both files;
+a coverage mismatch raises an error. Evaluation automatically resolves
+the second file from the saved `config.yaml`, or it can be specified
+explicitly via `--val-embedding-file-2`.
 
 #### Output artefacts
 
@@ -242,13 +247,16 @@ experiments/attention_mlp/{run_name}/
 
 ### `contrastive_encoder` — ArcFace feature learner
 
-Produces a drop-in replacement NPZ with learned embeddings that cluster by
-serotype, then downstream training uses `attention_mlp` on top.
+Produces a drop-in replacement NPZ containing learned embeddings that
+cluster by serotype. Downstream classification is performed by a subsequent
+`attention_mlp` run on these learned embeddings.
 
-Motivated by an analysis finding: raw ESM-2 mean embeddings don't separate
-K-types (within-class / between-class cosine gap is ~0.004, top-1 nearest-neighbour
-K-match is 11.3%). The encoder learns to pull same-K-type proteins together
-and push different-K-type apart.
+This model is motivated by a representation diagnostic: raw ESM-2 mean
+embeddings do not separate K-types (the within-class vs between-class
+cosine-similarity gap is approximately 0.004, and the top-1
+nearest-neighbour K-type match rate is 11.3%). The encoder is trained to
+bring same-K-type proteins together in the learned feature space and to
+separate proteins of different K-types.
 
 #### Architecture
 
@@ -267,39 +275,43 @@ Two ArcFace heads consume z during training (discarded at inference):
     total_loss = λ_k · L_K + λ_o · L_O
 ```
 
-ArcFace (Deng et al. 2019, face recognition) adds an additive angular margin
-to the ground-truth class's cosine logit, forcing the model to separate
-classes by at least that margin. This is more stable than SupCon at the
-tiny cosine deltas we have in ESM-2 space.
+ArcFace (Deng et al. 2019, originally developed for face recognition) adds
+an additive angular margin to the cosine logit of the ground-truth class,
+requiring the model to separate classes by at least that margin in angular
+space. This formulation provides more stable gradients than SupCon when the
+baseline cosine similarities between classes are very small, as is the case
+for raw ESM-2 representations in this setting.
 
 #### PK + cluster-stratified batching
 
-Each mini-batch is **P K-types × K samples per K-type** (default 32 × 8 = 256).
-Within each K-type's K samples, the sampler round-robins across 70%-identity
-clusters so the within-class pairs are sequence-diverse. The sampler lives at
-`models/contrastive_encoder/sampler.py` and has its own unit tests
-(`tests/test_contrastive_sampler.py`).
+Each mini-batch contains **P K-types × K samples per K-type** (default
+32 × 8 = 256). Within the K samples drawn from each K-type, the sampler
+round-robins across 70%-identity clusters, ensuring sequence diversity
+among the within-class pairs. The sampler is implemented in
+`models/contrastive_encoder/sampler.py` and has dedicated unit tests in
+`tests/test_contrastive_sampler.py`.
 
-Why this matters: with random sampling, K1 (1000 proteins) dominates batches
-over KL151 (450). PK sampling gives every K-type equal per-batch weight
-regardless of its training frequency.
+Rationale: under uniform random sampling, common classes (e.g., K1 with
+1000 proteins) dominate batches relative to rare classes (e.g., KL151
+with 450 proteins). PK sampling weights each K-type equally per batch,
+irrespective of its prevalence in the training set.
 
 #### Key hyperparameters (`models/contrastive_encoder/base_config.yaml`)
 
-| Knob | Default | Meaning |
+| Parameter | Default | Description |
 |---|---|---|
-| `model.hidden_dims` | `[1280, 1024, 1024]` | Backbone widths |
-| `model.output_dim` | `1280` | Encoder output dim (drop-in replacement size) |
+| `model.hidden_dims` | `[1280, 1024, 1024]` | Backbone layer widths |
+| `model.output_dim` | `1280` | Encoder output dimension (matches input for drop-in replacement) |
 | `arcface.margin` | `0.5` | Additive angular margin (radians) |
 | `arcface.scale` | `30.0` | Logit scale |
-| `training.lambda_k` | `1.0` | Weight on K-ArcFace loss |
-| `training.lambda_o` | `1.0` | Weight on O-ArcFace loss |
-| `training.learning_rate` | `1e-4` | AdamW |
+| `training.lambda_k` | `1.0` | Loss weight on the K-ArcFace term |
+| `training.lambda_o` | `1.0` | Loss weight on the O-ArcFace term |
+| `training.learning_rate` | `1e-4` | AdamW optimizer |
 | `training.weight_decay` | `1e-4` | — |
-| `training.epochs` | `100` | — |
-| `training.patience` | `20` | Early-stop on within/between cosine-gap stall |
-| `sampler.P` | `32` | K-types per batch |
-| `sampler.K` | `8` | Samples per K-type per batch |
+| `training.epochs` | `100` | Maximum training epochs |
+| `training.patience` | `20` | Early-stopping patience; monitored on the within/between cosine gap |
+| `sampler.P` | `32` | Number of K-types per batch |
+| `sampler.K` | `8` | Number of samples per K-type per batch |
 
 #### How to run
 
@@ -339,13 +351,15 @@ experiments/contrastive_encoder/{run_name}/
 ```
 
 Note: `cipher-evaluate` on a `contrastive_encoder` run **intentionally**
-raises `NotImplementedError` with instructions — the encoder is a feature
-transformer, not a classifier. Always pair it with a downstream
-`attention_mlp` run (step 2 above) for evaluation.
+raises `NotImplementedError` with usage instructions, because the encoder
+is a feature transformer rather than a classifier. Evaluation must be
+performed on a downstream `attention_mlp` run trained against the learned
+embeddings (step 2 above).
 
 #### Quality gate (recommended before downstream training)
 
-After step 1, check that the encoder actually improved separation:
+After step 1 completes, verify that the encoder has improved class
+separation before committing compute resources to downstream training:
 
 ```bash
 python scripts/analysis/phl_neighbor_labels.py \
@@ -359,9 +373,10 @@ python scripts/analysis/within_between_class_cosine.py \
     --label contrastive_{run}
 ```
 
-Targets: top-1 K-match rate > 20% (raw ESM-2 baseline is 11.3%); within/between
-cosine gap > 0.05 (raw ESM-2 baseline is +0.004). If both move, downstream
-training is worth the GPU time.
+Target thresholds: top-1 K-match rate above 20% (the raw ESM-2 baseline is
+11.3%) and within/between cosine gap above 0.05 (the raw ESM-2 baseline is
++0.004). If both metrics improve past these thresholds, the downstream
+`attention_mlp` training is warranted.
 
 ---
 
@@ -402,29 +417,90 @@ cipher-train --model attention_mlp \
     --max_samples_per_k 1000 --max_samples_per_o 3000
 ```
 
-`candidates_clusters.tsv` has columns `protein_id  cl30_X  cl40_X  ...  cl95_X`
-(no header). It ships with `cipher_training_data.zip`; regenerate with
-`scripts/utils/build_candidates_cluster_file.py` if candidates change.
+`candidates_clusters.tsv` contains columns `protein_id  cl30_X  cl40_X  ...  cl95_X`
+(no header). It is included in `cipher_training_data.zip`; it can be
+regenerated with `scripts/utils/build_candidates_cluster_file.py` if the
+set of candidates changes.
 
 ### Label strategies
 
-Controls how per-protein observation counts map to training labels. Some
-RBPs are **specific** (target one K-type), others are **polyspecific**
-(target multiple K-types).
+The K-type and O-type serotype assignment of each protein is aggregated
+from observations across multiple phage-host interactions. The same
+protein sequence may appear with different K-type annotations because:
 
-| Strategy | Labels | Loss | Best for |
+1. Some receptor binding proteins are **specific** (bind a single K-type);
+   observations for the sequence will largely agree.
+2. Others are **polyspecific** (recognize multiple K-types); observations
+   legitimately span several classes.
+3. A subset of observations are noisy — for example, a single host
+   annotation may be incorrect or reflect weak binding.
+
+Five label strategies are provided, each addressing these concerns
+differently. `multi_label_threshold` is recommended as the default.
+
+| Strategy | Label encoding | Loss | Appropriate use |
 |---|---|---|---|
-| `single_label` | One-hot (majority vote) | CrossEntropy (softmax) | Strictly specific RBPs |
-| `multi_label` | Binary per class | BCE | Polyspecific (treats 1 obs = 100 obs) |
-| `multi_label_threshold` | Binary with `count≥N AND fraction≥X` filter | BCE | **Recommended default** — polyspecific with noise filtering |
-| `weighted_soft` | Fractional, sums to 1 | KL-divergence (softmax) | Distribution matching (classes compete) |
-| `weighted_multi_label` | Fractional per class | BCE | Polyspecific with strength encoding |
+| `single_label` | One-hot (majority vote over observations) | Cross-entropy with softmax | Datasets in which RBPs are assumed strictly specific |
+| `multi_label` | Binary indicator per class | BCE (per-class independent) | Polyspecific RBPs, when observations are trusted |
+| `multi_label_threshold` | Binary with `count ≥ N AND count/total ≥ X` filter | BCE (per-class independent) | **Recommended default** — polyspecific labels with noise filtering |
+| `weighted_soft` | Fractional distribution summing to 1 | KL divergence to target (softmax output) | Distribution matching; classes compete for probability mass |
+| `weighted_multi_label` | Fractional per class (observation frequency) | BCE on soft targets | Polyspecific with observation-strength encoding; classes independent |
+
+#### `single_label`
+
+Each protein is assigned a single K-type corresponding to its most
+frequent host observation. The model is trained with softmax + cross-entropy,
+so classes compete for probability mass. Appropriate when the assumption of
+one-protein-one-K-type is acceptable, but it discards multi-target
+information for genuinely polyspecific proteins.
+
+#### `multi_label`
+
+Every observed K-type becomes a binary positive label; all non-observed
+K-types are negative. Training uses binary cross-entropy (BCE) per class,
+so each K-type is predicted independently. This preserves polyspecific
+information but treats a single observation identically to many — one
+noisy observation produces the same label signal as dozens of consistent
+observations.
+
+#### `multi_label_threshold` (recommended default)
+
+Identical to `multi_label`, with the refinement that a K-type is assigned
+a positive label only if:
+
+```
+count(K-type) ≥ min_label_count   AND   count(K-type) / total_observations ≥ min_label_fraction
+```
+
+Default thresholds are `min_label_count=1` and `min_label_fraction=0.1`.
+A stricter setting (`min_label_count=2, min_label_fraction=0.1`) drops
+singleton associations as likely noise. This strategy retains legitimate
+polyspecific associations while filtering sparse or inconsistent
+observations.
 
 ```bash
 cipher-train --model attention_mlp \
     --label_strategy multi_label_threshold \
     --min_label_count 2 --min_label_fraction 0.1
 ```
+
+#### `weighted_soft`
+
+Each protein's labels are a fractional distribution that sums to one,
+reflecting the relative frequency of each observed K-type. Training uses
+KL divergence between the softmax output and this target distribution,
+and classes therefore compete for probability mass. This is useful when
+observation frequencies can be interpreted as posterior probabilities
+over target serotypes.
+
+#### `weighted_multi_label`
+
+Each K-type receives a fractional positive label proportional to its
+relative observation count. Training uses BCE on these soft targets, so
+classes are predicted independently while preserving observation
+strength. This is the most faithful representation of a polyspecific
+protein whose affinities differ across K-types, without forcing
+probability mass to compete between classes.
 
 ### Provenance
 
@@ -435,9 +511,9 @@ Every trained run captures at training time:
 - `cli_argv` (full command)
 - `timestamp`
 
-Stored under `experiment.json["provenance"]`. To reproduce any run: check
-out `git_commit`, apply the saved `config.yaml`, rerun `cipher-train` with
-the same `--name`.
+These fields are stored under `experiment.json["provenance"]`. To
+reproduce a given run, check out the recorded `git_commit`, restore the
+saved `config.yaml`, and rerun `cipher-train` with the same `--name`.
 
 ---
 
@@ -457,8 +533,10 @@ cipher-evaluate experiments/{model}/{run_name}/ \
     --val-embedding-file-2 /path/to/val_kmer.npz
 ```
 
-Runs both ranking modes against 5 validation datasets (CHEN, GORODNICHIV,
-UCSD, PBIP, PhageHostLearn; KlebPhaCol excluded — proteins aren't capsular):
+Runs both ranking modes against five validation datasets (CHEN,
+GORODNICHIV, UCSD, PBIP, and PhageHostLearn). KlebPhaCol is excluded
+because its proteins are not capsular-interacting and therefore do not
+test the property ciPHer is designed to predict.
 
 - **Rank hosts given phage** — for each phage, score all candidate hosts
 - **Rank phages given host** — for each host, score all candidate phages
@@ -489,33 +567,91 @@ plot_model_comparison(
 
 ## HPC sweeps
 
-All sweep scripts submit SLURM jobs on Delta-AI with sensible per-row
-memory / time settings.
+All sweep scripts submit SLURM jobs on the Delta-AI cluster. Each row in
+the sweep array carries its own memory and wall-clock allocation,
+pre-configured for the size of the embedding it trains on.
 
-### Embedding sweep (single-embedding attention_mlp variants)
+### Embedding options tested
+
+The framework has been evaluated against a range of protein representations.
+Each embedding is keyed by MD5 hash of the amino-acid sequence, enabling
+shared storage across experiments and cross-model comparison.
+
+| Family | Variant | Output dim | Pooling | Source |
+|---|---|---|---|---|
+| **ESM-2** | 150M mean | 640 | mean over residues | Hugging Face `facebook/esm2_t30_150M_UR50D` |
+| | 650M mean | 1280 | mean over residues | `facebook/esm2_t33_650M_UR50D` |
+| | 650M seg4 | 5120 | mean within each of 4 sequence segments, concatenated | as above |
+| | 650M seg8 | 10 240 | mean within each of 8 segments | as above |
+| | 650M seg16 | 20 480 | mean within each of 16 segments | as above |
+| | 650M full | L × 1280 | per-residue (used by Light Attention) | as above |
+| | 3B mean | 2560 | mean over residues | `facebook/esm2_t36_3B_UR50D` |
+| | 15B mean | 5120 | mean over residues | `facebook/esm2_t48_15B_UR50D` |
+| **ProtT5** | XL mean | 1024 | mean over residues | `Rostlab/prot_t5_xl_uniref50` |
+| | XL seg4 / seg8 / seg16 | 4 096 / 8 192 / 16 384 | segmented pooling as above | as above |
+| | XXL mean | 1024 | mean over residues (fp16 inference) | `Rostlab/prot_t5_xxl_uniref50` |
+| **K-mer** | aa20_k3 | 8 000 | normalized 3-mer frequencies (20-letter alphabet) | computed from FASTA |
+| | aa20_k4 | 160 000 | normalized 4-mer frequencies (20-letter alphabet) | as above |
+| | murphy8_k5 | 32 768 | 5-mer frequencies (Murphy 8-letter reduction) | as above |
+| | murphy10_k5 | 100 000 | 5-mer frequencies (Murphy 10-letter reduction) | as above |
+| | li10_k5 | 100 000 | 5-mer frequencies (Li 10-letter reduction) | as above |
+
+Segmented pooling (`segN`) partitions a protein into N approximately equal
+segments from the C-terminus, mean-pools each segment independently, and
+concatenates the results. This preserves local sequence features that are
+destroyed by whole-protein mean pooling and has been observed to improve
+K-type discrimination for certain model sizes.
+
+### Embedding sweep (single-embedding `attention_mlp` variants)
+
+`scripts/run_embedding_sweep.sh` trains the same `attention_mlp`
+configuration against each embedding in the `EMBEDDINGS` array and
+evaluates the resulting runs against all validation datasets. Each row
+carries its own `--mem` and `--time` SLURM allocations, reflecting the
+size of the embedding file.
 
 ```bash
-DRY_RUN=1 bash scripts/run_embedding_sweep.sh         # preview
-bash scripts/run_embedding_sweep.sh                    # submit all
-bash scripts/run_embedding_sweep.sh esm2_3b_mean       # single embedding
+DRY_RUN=1 bash scripts/run_embedding_sweep.sh         # preview all jobs
+bash scripts/run_embedding_sweep.sh                    # submit all embeddings
+bash scripts/run_embedding_sweep.sh esm2_3b_mean       # submit a single embedding by label
 ```
 
-Two env-var toggles compose freely. Run names encode the combination so
-variants coexist in `experiments/attention_mlp/`:
+Two environment-variable toggles compose freely. Run names encode the
+combination so that variants coexist under `experiments/attention_mlp/`
+without naming collisions:
+
+| Variable | Effect on training | Run-name decoration |
+|---|---|---|
+| `FILTER_MODE=positive_list` | Switch from `--tools` filtering to `--positive_list` | Adds `posList_` prefix |
+| `USE_CLUSTERS=1` | Enable 70%-identity cluster-stratified downsampling | Adds `_cl70` suffix |
 
 ```bash
-FILTER_MODE=positive_list bash scripts/run_embedding_sweep.sh     # posList_ prefix
-USE_CLUSTERS=1 bash scripts/run_embedding_sweep.sh                 # _cl70 suffix
+# Pipeline-positive filter only
+FILTER_MODE=positive_list bash scripts/run_embedding_sweep.sh
+
+# Cluster-stratified downsampling only
+USE_CLUSTERS=1 bash scripts/run_embedding_sweep.sh
+
+# Both combined
 FILTER_MODE=positive_list USE_CLUSTERS=1 bash scripts/run_embedding_sweep.sh
+```
+
+To add a new embedding to the sweep, append a row to the `EMBEDDINGS`
+array at the top of the script in the format:
+
+```
+"<label>   <path_to_training_NPZ>   <path_to_validation_NPZ>   <mem>"
 ```
 
 ### Concat sweep (pLM + k-mer)
 
-`scripts/run_concat_sweep.sh` iterates over `(pLM, k-mer)` pairs and trains
-on the per-MD5 concatenation. Pairs live in the `EMBEDDING_PAIRS` array at
-the top of the script — edit to match the winners of the single-embedding
-sweep. Same env-var toggles as above; run names use
-`concat_<plm>+<kmer>[_cl70]` (+`posList_` if posList filter).
+`scripts/run_concat_sweep.sh` iterates over `(pLM, k-mer)` pairs and
+trains on their per-MD5 concatenation. The pairs are defined in the
+`EMBEDDING_PAIRS` array near the top of the script; update this array
+to reflect the best-performing embeddings from the single-embedding
+sweep. The same environment-variable toggles apply. Run names follow
+the pattern `concat_<plm>+<kmer>[_cl70]` (prefixed with `posList_` when
+the positive-list filter is active).
 
 ```bash
 DRY_RUN=1 bash scripts/run_concat_sweep.sh
@@ -543,9 +679,9 @@ python scripts/analysis/plot_sweep_results.py
 python scripts/analysis/compare_primary_datasets.py --filter sweep_
 ```
 
-The CSV is rebuilt idempotently from `experiment.json` +
-`results/evaluation.json` in every run dir, so it's safe to re-run after
-new experiments finish.
+The CSV is rebuilt idempotently from `experiment.json` and
+`results/evaluation.json` in each run directory, so it is safe to
+regenerate after additional experiments complete.
 
 ### Representation diagnostics (PHL ceiling investigation)
 
@@ -568,30 +704,81 @@ bash scripts/analysis/submit_within_between_analyses.sh    # within/between cosi
 
 ## Embedding extraction (`scripts/extract_embeddings/`)
 
-Scripts to regenerate ESM-2 / ProtT5 embeddings from raw FASTAs on Delta.
+Scripts in this directory regenerate ESM-2 and ProtT5 embeddings from
+the raw training and validation FASTAs. They are designed for execution
+on the Delta-AI cluster, where the pretrained model weights are cached
+under `$TORCH_HOME`.
 
 | File | Purpose |
 |---|---|
-| `esm2_extract.py` | ESM-2 (any size) extraction. `--pooling mean|segmentsN|full`. |
-| `prott5_extract.py` | ProtT5 (XL / XL-BFD / XXL) extraction. `--pooling mean|segmentsN`. `--half_precision` for XXL. Supports checkpoint resume. |
-| `submit_extractions.sh` | SLURM fan-out: one job per (model, pooling) train+val pair. Per-family conda envs (esmfold2 for ESM-2, prott5 for ProtT5). |
+| `esm2_extract.py` | Extracts embeddings from any ESM-2 model. Supports `--pooling mean`, `--pooling segmentsN` for any `N ≥ 2`, and `--pooling full` (per-residue output for Light Attention). |
+| `prott5_extract.py` | Extracts embeddings from any Rostlab ProtT5 variant (XL, XL-BFD, XXL). Supports `--pooling mean` and `--pooling segmentsN`, `--half_precision` for reduced VRAM, and `--max_length` for long-sequence truncation. Writes checkpoints every 2000 proteins and resumes automatically on restart. |
+| `submit_extractions.sh` | SLURM fan-out: submits one training-FASTA job and one validation-FASTA job per `(model, pooling)` entry in the `EXTRACTIONS` array. Selects the appropriate conda environment per family (`esmfold2` for ESM-2, `prott5` for ProtT5). |
+
+#### Invocation
 
 ```bash
-DRY_RUN=1 bash scripts/extract_embeddings/submit_extractions.sh   # preview
-bash scripts/extract_embeddings/submit_extractions.sh              # submit all
-bash scripts/extract_embeddings/submit_extractions.sh prott5_xl_segments4   # single combo
+# Preview all extraction jobs without submitting:
+DRY_RUN=1 bash scripts/extract_embeddings/submit_extractions.sh
+
+# Submit every (model, pooling) pair in the EXTRACTIONS array:
+bash scripts/extract_embeddings/submit_extractions.sh
+
+# Submit a single (model, pooling) pair by its derived label:
+bash scripts/extract_embeddings/submit_extractions.sh prott5_xl_segments4
 ```
 
-`prott5_extract.py` checkpoints every 2000 proteins to a `.partial.npz`
-sibling file and resumes automatically on restart, so a late crash loses
-at most 2000 proteins of work. OOM on a single long sequence is caught
-and the sequence is skipped (reported at end via `oom_skipped`).
+Missing NPZ files (extractions not yet run) are skipped at submission
+time with a warning rather than triggering a failure. This allows the
+script to be re-run safely as additional extractions become available.
+
+#### Direct invocation of the extractors
+
+Each extractor can also be invoked directly within a SLURM job script:
+
+```bash
+# ESM-2 650M mean (the original baseline embedding)
+python scripts/extract_embeddings/esm2_extract.py \
+    data/training_data/metadata/candidates.faa \
+    /work/output/esm2_650m_mean.npz \
+    --model esm2_t33_650M_UR50D --layer 33 --pooling mean --key_by_md5
+
+# ESM-2 650M segmented pooling (N=8)
+python scripts/extract_embeddings/esm2_extract.py \
+    data/training_data/metadata/candidates.faa \
+    /work/output/esm2_650m_segments8.npz \
+    --model esm2_t33_650M_UR50D --layer 33 --pooling segments8 --key_by_md5
+
+# ProtT5-XL mean
+python scripts/extract_embeddings/prott5_extract.py \
+    data/training_data/metadata/candidates.faa \
+    /work/output/prott5_xl_mean.npz \
+    --model_name Rostlab/prot_t5_xl_uniref50 --pooling mean --key_by_md5
+
+# ProtT5-XXL mean (11B parameters; half precision required on a single H100)
+python scripts/extract_embeddings/prott5_extract.py \
+    data/training_data/metadata/candidates.faa \
+    /work/output/prott5_xxl_mean.npz \
+    --model_name Rostlab/prot_t5_xxl_uniref50 --pooling mean --key_by_md5 \
+    --half_precision --max_length 3000
+```
+
+#### Crash resilience
+
+`prott5_extract.py` writes a partial checkpoint (`<output>.partial.npz`)
+after every 2000 proteins and resumes automatically when restarted with
+the same output path, so a late-stage failure forfeits at most 2000
+proteins of computation. An out-of-memory error on a single long
+sequence is caught, the sequence is skipped, and the total count of
+skipped sequences is reported at the end of the run via the
+`oom_skipped` field in the log.
 
 ---
 
 ## Data packaging
 
-Raw inputs ship as two zips with sha256 manifests:
+Raw input files are distributed as two archives, each with an
+accompanying sha256 manifest:
 
 ```bash
 bash scripts/utils/package_data.sh
@@ -599,9 +786,11 @@ bash scripts/utils/package_data.sh
 # -> dist/cipher_validation_data.zip (5 validation datasets; KlebPhaCol excluded)
 ```
 
-Each zip includes `MANIFEST.txt` for byte-level verification
-(`shasum -a 256 -c MANIFEST.txt`). Both zips also get uploaded to Zenodo
-(embeddings provided separately — regenerate via the extraction scripts).
+Each archive contains a `MANIFEST.txt` file enabling byte-level
+verification via `shasum -a 256 -c MANIFEST.txt`. Both archives are also
+deposited on Zenodo. Embeddings are published separately and can be
+regenerated from source FASTAs using the scripts under
+`scripts/extract_embeddings/`.
 
 ---
 
@@ -618,5 +807,6 @@ pytest tests/test_contrastive_sampler.py -v
 
 ## References
 
-See `ONBOARDING.md` for biology background, data documentation, and known
-issues from prior work.
+Additional documentation is available in `ONBOARDING.md`, which covers
+biological background, data provenance, and known limitations inherited
+from prior work.
