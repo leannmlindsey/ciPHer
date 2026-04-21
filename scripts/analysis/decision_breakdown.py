@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
-"""Per-(phage, host) decision breakdown: which head (K or O) drove each max?
+"""Per-pair decision breakdown: which head (K or O) drove each rank-1 pair?
 
-Re-implements the ranking scoring loop with explicit tracking of which head
-(K or O) produced the winning score for each (phage, candidate_host) pair.
-Does NOT call predictor.score_pair() — that would hide the per-head split.
-Does still use predictor.predict_protein(), so K+O probabilities come from
-the trained model exactly as in normal evaluation.
+For each (phage, candidate_host) pair in a validation dataset we rank the
+candidate, then classify the rank-1 pairs as:
+  - TP (true positive):  pair has label=1, rank=1. Model correctly put a real
+                          interaction partner at the top.
+  - FP (false positive): pair has label=0, rank=1. Model incorrectly put a
+                          non-interaction partner at the top (can happen via
+                          score ties between positives and negatives).
 
-Answers:
-  1. When the top-1 predicted host is a TRUE positive, was K or O driving?
-  2. When top-1 is a FALSE positive, which head drove it?
-  3. For actual positive hosts, at what rank bucket did they land, split by
-     which head drove their score?
+FN and TN are not reported — focus is on where the model's rank-1 picks
+come from.
+
+For each TP and FP pair we also record which head (K or O) drove its score
+(i.e. which head produced the larger z-scored probability on the winning
+protein). This tells us:
+  * of our TP rank-1 picks, what fraction were K-driven vs O-driven
+    — i.e. which head is doing the "correct" work
+  * of our FP rank-1 picks, what fraction were K-driven vs O-driven
+    — i.e. which head is responsible for the errors
+
+Also prints the bucketed rank distribution of positive pairs for context.
 
 Usage:
     python scripts/analysis/decision_breakdown.py <run_dir> [--datasets ...]
@@ -135,17 +144,21 @@ def _analyze_dataset(predictor, ds_name, ds_dir, emb_dict, pid_md5):
         interactions[p['phage_id']][p['host_id']] = p['label']
         serotypes[p['host_id']] = {'K': p['host_K'], 'O': p['host_O']}
 
-    # Counters
-    top1_tp = Counter()  # {'K': n, 'O': n}
-    top1_fp = Counter()
-    positive_by_bucket = defaultdict(Counter)  # bucket -> Counter({'K','O'})
+    # Per-pair counters at rank 1 (by winning head)
+    tp_head = Counter()  # label=1, rank=1
+    fp_head = Counter()  # label=0, rank=1
+    # Positive-host rank distribution (for context; rank buckets × head)
+    positive_by_bucket = defaultdict(Counter)
+
+    n_pos_pairs = 0
+    n_neg_pairs = 0
     n_phages_scored = 0
 
     for phage, host_labels in interactions.items():
         pos_hosts = {h for h, label in host_labels.items() if label == 1}
         if not pos_hosts:
+            # Matches evaluate_rankings: phages without positives are skipped
             continue
-        candidates = list(host_labels.keys())
 
         # Resolve protein IDs + embeddings for this phage
         proteins = phage_protein_map.get(phage, set())
@@ -162,48 +175,45 @@ def _analyze_dataset(predictor, ds_name, ds_dir, emb_dict, pid_md5):
         prot_ids = [p[0] for p in prot_items]
         prot_embs = [p[1] for p in prot_items]
 
-        # Score every candidate host, keep provenance
-        host_scores = []  # list of (host, score_tuple)
-        for host in candidates:
+        # Score EVERY candidate (positive and negative), track provenance
+        scored = []  # list of (host, label, score_tuple)
+        for host, label in host_labels.items():
             if host not in serotypes:
                 continue
             hk = serotypes[host]['K']
             ho = serotypes[host]['O']
             r = _score_host_with_provenance(predictor, prot_ids, prot_embs, hk, ho)
             if r is not None:
-                host_scores.append((host, r))
-        if not host_scores:
+                scored.append((host, label, r))
+        if not scored:
             continue
         n_phages_scored += 1
 
-        host_scores.sort(key=lambda x: -x[1][0])
-        # Rank dict (competition-style ties)
-        sorted_for_ties = [(h, s[0]) for h, s in host_scores]
+        # Rank dict with competition ties (positives and negatives both ranked)
+        scored.sort(key=lambda x: -x[2][0])
+        sorted_for_ties = [(h, s[0]) for h, _, s in scored]
         host_to_rank = _ranks_with_ties(sorted_for_ties, tie_method='competition')
 
-        # Provenance lookup by host
-        host_to_prov = {h: s for h, s in host_scores}
-
-        # Top-1 breakdown
-        top_host, top_prov = host_scores[0]
-        top_head = top_prov[1]
-        if top_host in pos_hosts:
-            top1_tp[top_head] += 1
-        else:
-            top1_fp[top_head] += 1
-
-        # Positive-host rank + head
-        for ph in pos_hosts:
-            if ph not in host_to_rank:
-                continue
-            rank = host_to_rank[ph]
-            head = host_to_prov[ph][1]
-            positive_by_bucket[_rank_bucket(rank)][head] += 1
+        # Classify every pair: TP/FP for rank 1, buckets for positives
+        for host, label, r in scored:
+            head = r[1]
+            rank = host_to_rank[host]
+            if label == 1:
+                n_pos_pairs += 1
+                positive_by_bucket[_rank_bucket(rank)][head] += 1
+                if rank == 1:
+                    tp_head[head] += 1
+            else:
+                n_neg_pairs += 1
+                if rank == 1:
+                    fp_head[head] += 1
 
     return {
         'n_phages_scored': n_phages_scored,
-        'top1_tp': top1_tp,
-        'top1_fp': top1_fp,
+        'n_pos_pairs': n_pos_pairs,
+        'n_neg_pairs': n_neg_pairs,
+        'tp_head': tp_head,
+        'fp_head': fp_head,
         'positive_by_bucket': positive_by_bucket,
     }
 
@@ -214,24 +224,42 @@ def _pct(n, total):
 
 def _print_ds_report(ds_name, r):
     n = r['n_phages_scored']
-    tp_total = sum(r['top1_tp'].values())
-    fp_total = sum(r['top1_fp'].values())
-    print(f'=== {ds_name} — {n} scored phages ===')
+    n_pos = r['n_pos_pairs']
+    n_neg = r['n_neg_pairs']
+    tp_total = sum(r['tp_head'].values())
+    fp_total = sum(r['fp_head'].values())
+
+    print(f'=== {ds_name} — {n} scored phages, {n_pos} pos pairs, {n_neg} neg pairs ===')
     if not n:
         print('  (no scorable phages)')
         print()
         return
 
-    print(f'  Top-1 is TP: {tp_total}/{n}  ({_pct(tp_total, n)})')
-    print(f'  Top-1 is FP: {fp_total}/{n}  ({_pct(fp_total, n)})')
-    print()
-    print(f'  Winning head at top-1:')
-    print(f'    TP | K={r["top1_tp"].get("K", 0):>4}  O={r["top1_tp"].get("O", 0):>4}')
-    print(f'    FP | K={r["top1_fp"].get("K", 0):>4}  O={r["top1_fp"].get("O", 0):>4}')
+    # TP@1 = positive (label=1) pair at rank 1
+    tp_k = r['tp_head'].get('K', 0)
+    tp_o = r['tp_head'].get('O', 0)
+    tp_k_share = tp_k / tp_total if tp_total else 0.0
+    tp_o_share = tp_o / tp_total if tp_total else 0.0
+    print(f'  TP@1 (positive pair at rank 1): {tp_total}/{n_pos} = '
+          f'{(tp_total / n_pos if n_pos else 0):.3f}   [= HR@1]')
+    print(f'       K-driven: {tp_k:>4}  ({tp_k_share:.1%})')
+    print(f'       O-driven: {tp_o:>4}  ({tp_o_share:.1%})')
     print()
 
+    # FP@1 = negative (label=0) pair at rank 1 (via ties)
+    fp_k = r['fp_head'].get('K', 0)
+    fp_o = r['fp_head'].get('O', 0)
+    fp_k_share = fp_k / fp_total if fp_total else 0.0
+    fp_o_share = fp_o / fp_total if fp_total else 0.0
+    print(f'  FP@1 (negative pair at rank 1): {fp_total}/{n_neg} = '
+          f'{(fp_total / n_neg if n_neg else 0):.3f}')
+    print(f'       K-driven: {fp_k:>4}  ({fp_k_share:.1%})')
+    print(f'       O-driven: {fp_o:>4}  ({fp_o_share:.1%})')
+    print()
+
+    # Positive-pair rank distribution (keeps useful rank context)
     buckets = ['1', '2-5', '6-20', '>20']
-    print(f'  Positive hosts — rank bucket × winning head:')
+    print(f'  Positive pair rank distribution — bucket × winning head:')
     print(f'    {"bucket":<8} {"K":>6} {"O":>6}  total')
     for b in buckets:
         c = r['positive_by_bucket'].get(b, Counter())
