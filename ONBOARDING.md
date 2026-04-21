@@ -321,32 +321,59 @@ framework, spanning representative combinations of embedding family,
 training-set filter, sampling strategy, and feature-concatenation
 configuration. Per-column maxima are **bolded**.
 
-| Model | Training regime | CHEN | GORODNICHIV | UCSD | **PBIP** | **PHL** | PHL+PBIP combined | 5-ds mean |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| `sweep_esm2_650m_mean` | tools, random | 0.275 | 1.000 | 0.053 | 0.595 | 0.113 | 0.239 | 0.295 |
-| `sweep_esm2_3b_mean` | tools, random | 0.275 | 1.000 | 0.072 | 0.789 | 0.107 | **0.336** | 0.373 |
-| `sweep_prott5_mean` | tools, random | 0.275 | 1.000 | 0.024 | 0.735 | 0.150 | 0.288 | 0.326 |
-| `sweep_kmer_murphy8_k5` | tools, random | 0.275 | 1.000 | 0.113 | **0.800** | 0.098 | 0.284 | 0.330 |
-| `sweep_posList_esm2_650m_seg4_cl70` | positive_list, cluster-70 | 0.275 | 1.000 | 0.100 | 0.751 | 0.144 | 0.307 | 0.322 |
-| `sweep_posList_esm2_3b_mean_cl70` | positive_list, cluster-70 | 0.275 | 1.000 | 0.100 | 0.679 | 0.150 | 0.302 | 0.353 |
-| `sweep_posList_kmer_li10_k5_cl70` | positive_list, cluster-70 | 0.275 | 1.000 | 0.100 | 0.581 | 0.160 | 0.243 | 0.348 |
-| `concat_prott5_mean+kmer_li10_k5` | tools, random | 0.275 | 1.000 | 0.096 | 0.737 | **0.169** | 0.288 | **0.377** |
-| `concat_posList_esm2_3b_mean+kmer_li10_k5_cl70` | positive_list, cluster-70 | 0.275 | 1.000 | 0.081 | 0.647 | 0.163 | 0.289 | 0.354 |
+**Aggregate metrics** (the last four columns) report **pair-weighted
+HR@k** across the five validation datasets, not a simple mean over
+datasets. A pair-weighted average treats every (phage, host) pair
+equally, which is appropriate because dataset sizes range from 12
+pairs (GORODNICHIV) to 921 pairs (PBIP):
+
+```
+pair-weighted HR@k = (Σ_ds hits_ds(k)) / (Σ_ds n_pairs_ds)
+                   = (total correct in top-k across all five datasets)
+                     / (total pairs across all five datasets)
+```
+
+The **PHL+PBIP combined HR@1** column pools both directions
+(rank_hosts and rank_phages) across PhageHostLearn and PBIP,
+pair-weighted. The **σ** columns report the standard deviation of
+per-dataset rank-hosts HR@k across the five datasets, which captures
+the cross-dataset spread for each model.
+
+| Model | Training regime | CHEN | GORODNICHIV | UCSD | **PBIP** | **PHL** | PHL+PBIP (pair-wt) | HR@1 (pair-wt) | σ HR@1 | HR@5 (pair-wt) | σ HR@5 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `sweep_esm2_650m_mean` | tools, random | 0.275 | 1.000 | 0.053 | 0.595 | 0.113 | 0.298 | 0.408 | 0.392 | 0.615 | 0.417 |
+| `sweep_esm2_3b_mean` | tools, random | 0.275 | 1.000 | 0.072 | 0.789 | 0.107 | **0.441** | 0.526 | 0.421 | 0.627 | 0.406 |
+| `sweep_prott5_mean` | tools, random | 0.275 | 1.000 | 0.024 | 0.735 | 0.150 | 0.359 | 0.496 | 0.414 | 0.614 | 0.409 |
+| `sweep_kmer_murphy8_k5` | tools, random | 0.275 | 1.000 | 0.113 | **0.800** | 0.098 | 0.369 | **0.531** | 0.424 | **0.633** | 0.409 |
+| `sweep_posList_esm2_650m_seg4_cl70` | positive_list, cluster-70 | 0.275 | 1.000 | 0.100 | 0.751 | 0.144 | 0.385 | 0.515 | 0.400 | 0.630 | 0.390 |
+| `sweep_posList_esm2_3b_mean_cl70` | positive_list, cluster-70 | 0.275 | 1.000 | 0.100 | 0.679 | 0.150 | 0.374 | 0.472 | 0.386 | 0.620 | 0.391 |
+| `sweep_posList_kmer_li10_k5_cl70` | positive_list, cluster-70 | 0.275 | 1.000 | 0.100 | 0.581 | 0.160 | 0.296 | 0.416 | 0.372 | 0.628 | 0.411 |
+| `concat_prott5_mean+kmer_li10_k5` | tools, random | 0.275 | 1.000 | 0.096 | 0.737 | **0.169** | 0.358 | 0.511 | 0.394 | 0.632 | 0.386 |
+| `concat_posList_esm2_3b_mean+kmer_li10_k5_cl70` | positive_list, cluster-70 | 0.275 | 1.000 | 0.081 | 0.647 | 0.163 | 0.359 | 0.453 | 0.384 | 0.603 | 0.397 |
 
 CHEN and GORODNICHIV HR@1 are saturated for the majority of runs (CHEN
-contains three phages, GORODNICHIV contains three phages and a single
-K-type). PBIP and PhageHostLearn are the discriminating datasets because
-their candidate pools are large enough to differentiate between models.
+contains three phages; GORODNICHIV contains three phages and a single
+K-type). PBIP and PhageHostLearn are the discriminating datasets
+because their candidate pools are large enough to differentiate
+between models.
 
 **Observations:**
 
 - The best single-representation run for **PBIP rank-hosts HR@1** is
-  `sweep_kmer_murphy8_k5` (0.800), indicating that k-mer features alone
-  capture a meaningful fraction of the signal on this dataset.
+  `sweep_kmer_murphy8_k5` (0.800), indicating that k-mer features
+  alone capture a meaningful fraction of the signal on this dataset.
+  The same run also leads on pair-weighted HR@1 (0.531) and pair-weighted
+  HR@5 (0.633) across all five datasets.
 - The best run for **PhageHostLearn rank-hosts HR@1** is
   `concat_prott5_mean+kmer_li10_k5` (0.169), which concatenates a pLM
-  embedding with a k-mer feature vector. The same run produces the best
-  **five-dataset mean HR@1** (0.377).
+  embedding with a k-mer feature vector.
+- The best run for the **pair-weighted PHL+PBIP combined HR@1** is
+  `sweep_esm2_3b_mean` (0.441), driven largely by its strong PBIP
+  performance.
+- Per-dataset standard deviations are large (σ ≈ 0.39 for HR@1 and
+  σ ≈ 0.40 for HR@5) because GORODNICHIV (HR@1 = 1.000) and UCSD
+  (HR@1 ≈ 0.05–0.12) sit at opposite ends of the range. The spread is
+  intrinsic to dataset composition, not to model variance.
 - Moving the training-set filter from tool-based to the pipeline-positive
   list and switching random downsampling to cluster-stratified sampling
   at 70% identity consistently lifts PhageHostLearn HR@1 by 30–45%
