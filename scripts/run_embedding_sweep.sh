@@ -98,6 +98,8 @@ EMBEDDINGS=(
     # PLM embeddings
     "esm2_650m_mean     ${TRAIN_EMB_ROOT}/embeddings_binned/candidates_embeddings_md5.npz                                   ${VAL_EMB_ROOT}/validation_embeddings_md5.npz                                                    64G"
     "esm2_650m_seg4     /work/hdd/bfzj/llindsey1/embeddings_segments4/candidates_embeddings_segments4_md5.npz               /work/hdd/bfzj/llindsey1/validation_embeddings_segments4/validation_embeddings_segments4_md5.npz  64G"
+    "esm2_650m_seg8     /work/hdd/bfzj/llindsey1/embeddings/esm2_650m_segments8/candidates_esm2_650m_segments8_md5.npz      /work/hdd/bfzj/llindsey1/validation_embeddings/esm2_650m_segments8/validation_esm2_650m_segments8_md5.npz    96G"
+    "esm2_650m_seg16    /work/hdd/bfzj/llindsey1/embeddings/esm2_650m_segments16/candidates_esm2_650m_segments16_md5.npz    /work/hdd/bfzj/llindsey1/validation_embeddings/esm2_650m_segments16/validation_esm2_650m_segments16_md5.npz  128G"
     "esm2_3b_mean       ${TRAIN_EMB_ROOT}/embeddings_esm2_3b/candidates_embeddings_md5.npz                                  /work/hdd/bfzj/llindsey1/validation_embeddings_esm2_3b/validation_embeddings_md5.npz            128G"
     "esm2_150m_mean     ${TRAIN_EMB_ROOT}/embeddings_esm2_150m/candidates_embeddings_md5.npz                                /work/hdd/bfzj/llindsey1/validation_embeddings_esm2_150m/validation_embeddings_md5.npz           64G"
     "prott5_mean        ${TRAIN_EMB_ROOT}/embeddings_prott5/candidates_embeddings_md5.npz                                   /work/hdd/bfzj/llindsey1/validation_embeddings_prott5/validation_embeddings_md5.npz              64G"
