@@ -50,16 +50,26 @@ GLYCAN_BINDERS="${GLYCAN_BINDERS:-${DATA_DIR}/training_data/metadata/glycan_bind
 VAL_FASTA="${VAL_FASTA:-${DATA_DIR}/validation_data/metadata/validation_rbps_all.faa}"
 VAL_DATASETS_DIR="${VAL_DATASETS_DIR:-${DATA_DIR}/validation_data/HOST_RANGE}"
 
-# Per-residue ESM-2 650M embeddings (variable-length, used by ConvAttn pooler)
-TRAIN_EMB="${TRAIN_EMB:-/work/hdd/bfzj/llindsey1/embeddings_full/candidates_embeddings_full_md5.npz}"
-VAL_EMB="${VAL_EMB:-/work/hdd/bfzj/llindsey1/validation_embeddings_full/validation_embeddings_full_md5.npz}"
+# Per-residue ESM-2 650M embeddings (variable-length, used by ConvAttn pooler).
+# Paths updated 2026-04-21 to the new full-coverage extraction; the old
+# /work/hdd/bfzj/llindsey1/embeddings_full/... file only covered ~4.5K MD5s
+# and left the model training on 14% of the filtered set.
+TRAIN_EMB="${TRAIN_EMB:-/work/hdd/bfzj/llindsey1/embeddings/esm2_650m_full/candidates_esm2_650m_full_md5.npz}"
+VAL_EMB="${VAL_EMB:-/work/hdd/bfzj/llindsey1/validation_embeddings/esm2_650m_full/validation_esm2_650m_full_md5.npz}"
 EMBEDDING_TYPE="${EMBEDDING_TYPE:-esm2_650m_full}"
+
+# Training-set filter and cluster-stratified downsampling (see
+# memory/project_training_filters.md). Default to the advisor's curated
+# positive list + 70%-identity cluster-stratified sampling — the combo
+# that improved PHL performance in the attention_mlp sweep.
+POSITIVE_LIST="${POSITIVE_LIST:-${DATA_DIR}/training_data/metadata/pipeline_positive.list}"
+CLUSTER_FILE="${CLUSTER_FILE:-${DATA_DIR}/training_data/metadata/candidates_clusters.tsv}"
+CLUSTER_THRESHOLD="${CLUSTER_THRESHOLD:-70}"
 
 # ============================================================
 # Model / training config (overridable via env)
 # ============================================================
 MODEL="light_attention_binary"
-TOOLS="${TOOLS:-DepoScope,PhageRBPdetect}"
 LR="${LR:-5e-4}"
 BATCH_SIZE="${BATCH_SIZE:-32}"
 EPOCHS="${EPOCHS:-200}"
@@ -70,7 +80,7 @@ MAX_SAMPLES_K="${MAX_SAMPLES_K:-1000}"
 MAX_SAMPLES_O="${MAX_SAMPLES_O:-3000}"
 MIN_SOURCES="${MIN_SOURCES:-1}"
 
-NAME="${NAME:-lab_${EMBEDDING_TYPE}}"
+NAME="${NAME:-lab_${EMBEDDING_TYPE}_posList_cl${CLUSTER_THRESHOLD}}"
 DRY_RUN="${DRY_RUN:-0}"
 
 # ============================================================
@@ -78,14 +88,17 @@ DRY_RUN="${DRY_RUN:-0}"
 # ============================================================
 echo "============================================================"
 echo "LightAttentionBinary training job"
-echo "  Cipher dir: ${CIPHER_DIR}"
-echo "  Run name:   ${NAME}"
-echo "  Embedding:  ${EMBEDDING_TYPE}"
-echo "  Train emb:  ${TRAIN_EMB}"
-echo "  Val emb:    ${VAL_EMB}"
+echo "  Cipher dir:     ${CIPHER_DIR}"
+echo "  Run name:       ${NAME}"
+echo "  Embedding:      ${EMBEDDING_TYPE}"
+echo "  Train emb:      ${TRAIN_EMB}"
+echo "  Val emb:        ${VAL_EMB}"
+echo "  Positive list:  ${POSITIVE_LIST}"
+echo "  Cluster file:   ${CLUSTER_FILE} (threshold=${CLUSTER_THRESHOLD})"
 echo "============================================================"
 
-for f in "${TRAIN_EMB}" "${ASSOC_MAP}" "${GLYCAN_BINDERS}" "${VAL_FASTA}"; do
+for f in "${TRAIN_EMB}" "${ASSOC_MAP}" "${GLYCAN_BINDERS}" "${VAL_FASTA}" \
+         "${POSITIVE_LIST}" "${CLUSTER_FILE}"; do
     if [ ! -e "${f}" ] && [ "${DRY_RUN}" != "1" ]; then
         echo "ERROR: required path missing: ${f}" >&2
         exit 1
@@ -102,7 +115,9 @@ fi
 # ============================================================
 TRAIN_CMD="python -m cipher.cli.train_runner \
     --model ${MODEL} \
-    --tools ${TOOLS} \
+    --positive_list ${POSITIVE_LIST} \
+    --cluster_file ${CLUSTER_FILE} \
+    --cluster_threshold ${CLUSTER_THRESHOLD} \
     --lr ${LR} \
     --batch_size ${BATCH_SIZE} \
     --epochs ${EPOCHS} \
