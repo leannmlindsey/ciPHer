@@ -42,6 +42,7 @@ for entry in "${ANALYSES[@]}"; do
 #SBATCH --job-name=${NAME}
 #SBATCH --account=${ACCOUNT}
 #SBATCH --partition=${PARTITION}
+#SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=${MEM}
 #SBATCH --time=${TIME}
