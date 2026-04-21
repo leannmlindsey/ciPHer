@@ -37,7 +37,7 @@ VAL_EMB_ROOT="/work/hdd/bfzj/llindsey1/validation_embeddings"
 # Extractions to submit.
 #
 # Format (space-separated columns):
-#   "family  model_name  pooling  mem  gpus  time"
+#   "family  model_name  pooling  mem  gpus  time  extra_args"
 #
 # family: esm2 or prott5 (dispatches to the right extract_*.py)
 # model_name: HuggingFace model id (esm2_t33_650M_UR50D,
@@ -46,12 +46,23 @@ VAL_EMB_ROOT="/work/hdd/bfzj/llindsey1/validation_embeddings"
 # mem: SLURM --mem value; use "0" for full-node reservation
 # gpus: --gpus-per-node (1 normally, 4 for mem=0)
 # time: SLURM --time limit
-#
-# Start small — ESM-2 650M seg8/seg16. If they improve on seg4, extend.
+# extra_args: extra CLI args for the extract script (use "-" for none).
+#             E.g. "--half_precision" for very large models.
 # ============================================================
 EXTRACTIONS=(
-    "esm2  esm2_t33_650M_UR50D  segments8   64G  1  12:00:00"
-    "esm2  esm2_t33_650M_UR50D  segments16  64G  1  12:00:00"
+    # ESM-2 650M seg8 / seg16 — completed 2026-04-20, kept here for history:
+    # "esm2    esm2_t33_650M_UR50D            segments8   64G   1  12:00:00  -"
+    # "esm2    esm2_t33_650M_UR50D            segments16  64G   1  12:00:00  -"
+
+    # ProtT5-XL segmented pooling (tests whether ProtT5's K-type signal
+    # amplifies with local pooling — ESM-2 seg4 bumped top-1 match 11.3 -> 12.6).
+    "prott5  Rostlab/prot_t5_xl_uniref50    segments4   128G  1  12:00:00  -"
+    "prott5  Rostlab/prot_t5_xl_uniref50    segments8   128G  1  12:00:00  -"
+    "prott5  Rostlab/prot_t5_xl_uniref50    segments16  128G  1  12:00:00  -"
+
+    # ProtT5-XXL mean (11B params — does size help for ProtT5?).
+    # Half precision required to fit on a single H100.
+    "prott5  Rostlab/prot_t5_xxl_uniref50   mean        0     4  24:00:00  --half_precision"
 )
 
 FILTER="${1:-}"
@@ -175,7 +186,9 @@ echo ""
 
 N=0
 for entry in "${EXTRACTIONS[@]}"; do
-    read -r FAMILY MODEL POOLING MEM GPUS TIME <<< "$entry"
+    read -r FAMILY MODEL POOLING MEM GPUS TIME EXTRA_ARGS <<< "$entry"
+    # Dash means "no extra args" — don't pass literal "-" to python.
+    [ "$EXTRA_ARGS" = "-" ] && EXTRA_ARGS=""
     TAG=$(model_tag "$MODEL")
     LABEL="${TAG}_${POOLING}"
 
@@ -189,9 +202,9 @@ for entry in "${EXTRACTIONS[@]}"; do
     VAL_NPZ="${VAL_DIR}/validation_${LABEL}_md5.npz"
 
     build_and_submit "$TRAIN_FASTA" "$TRAIN_NPZ" "extract_${LABEL}_train" \
-        "$FAMILY" "$MODEL" "$POOLING" "$MEM" "$GPUS" "$TIME" ""
+        "$FAMILY" "$MODEL" "$POOLING" "$MEM" "$GPUS" "$TIME" "$EXTRA_ARGS"
     build_and_submit "$VAL_FASTA" "$VAL_NPZ" "extract_${LABEL}_val" \
-        "$FAMILY" "$MODEL" "$POOLING" "$MEM" "$GPUS" "$TIME" ""
+        "$FAMILY" "$MODEL" "$POOLING" "$MEM" "$GPUS" "$TIME" "$EXTRA_ARGS"
     N=$((N + 2))
 done
 
