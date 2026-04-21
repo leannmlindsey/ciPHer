@@ -5,9 +5,9 @@ prints a sortable summary table, saves a CSV, and generates HR@k
 comparison plots.
 
 Usage:
-    python scripts/compare_experiments.py
-    python scripts/compare_experiments.py --top 10            # only show top 10
-    python scripts/compare_experiments.py --filter SpikeHunter  # only experiments matching pattern
+    python scripts/analysis/compare_experiments.py
+    python scripts/analysis/compare_experiments.py --top 10            # only show top 10
+    python scripts/analysis/compare_experiments.py --filter SpikeHunter  # only experiments matching pattern
 """
 
 import argparse
