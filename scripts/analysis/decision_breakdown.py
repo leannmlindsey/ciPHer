@@ -1,24 +1,18 @@
 #!/usr/bin/env python3
-"""Per-pair decision breakdown: which head (K or O) drove each rank-1 pair?
+"""Per-pair decision breakdown: which head (K or O) drives HR@1 hits and misses?
 
-For each (phage, candidate_host) pair in a validation dataset we rank the
-candidate, then classify the rank-1 pairs as:
-  - TP (true positive):  pair has label=1, rank=1. Model correctly put a real
-                          interaction partner at the top.
-  - FP (false positive): pair has label=0, rank=1. Model incorrectly put a
-                          non-interaction partner at the top (can happen via
-                          score ties between positives and negatives).
+For each positive (phage, host) pair in a validation dataset, rank the host
+against all candidates for that phage and check where the positive landed:
 
-FN and TN are not reported — focus is on where the model's rank-1 picks
-come from.
+  - HR@1 hit:  positive is at rank 1. The model got this pair right.
+  - HR@1 miss: positive is at rank > 1. The model got this pair wrong.
 
-For each TP and FP pair we also record which head (K or O) drove its score
-(i.e. which head produced the larger z-scored probability on the winning
-protein). This tells us:
-  * of our TP rank-1 picks, what fraction were K-driven vs O-driven
-    — i.e. which head is doing the "correct" work
-  * of our FP rank-1 picks, what fraction were K-driven vs O-driven
-    — i.e. which head is responsible for the errors
+For each pair we also record which head (K or O) drove its score (= which
+head produced the larger z-scored probability on the winning protein). This
+answers:
+  * of the hits, which head earned them? (K or O doing the "correct work")
+  * of the misses, which head was scoring the positive when it landed
+    outside rank 1? (which head is under-confident on real positives)
 
 Also prints the bucketed rank distribution of positive pairs for context.
 
@@ -144,9 +138,10 @@ def _analyze_dataset(predictor, ds_name, ds_dir, emb_dict, pid_md5):
         interactions[p['phage_id']][p['host_id']] = p['label']
         serotypes[p['host_id']] = {'K': p['host_K'], 'O': p['host_O']}
 
-    # Per-pair counters at rank 1 (by winning head)
-    tp_head = Counter()  # label=1, rank=1
-    fp_head = Counter()  # label=0, rank=1
+    # Positive-pair counters, split by whether the positive was at rank 1 and
+    # by which head drove the positive's own score.
+    hit_head = Counter()   # positive pair at rank == 1
+    miss_head = Counter()  # positive pair at rank > 1
     # Positive-host rank distribution (for context; rank buckets × head)
     positive_by_bucket = defaultdict(Counter)
 
@@ -194,7 +189,10 @@ def _analyze_dataset(predictor, ds_name, ds_dir, emb_dict, pid_md5):
         sorted_for_ties = [(h, s[0]) for h, _, s in scored]
         host_to_rank = _ranks_with_ties(sorted_for_ties, tie_method='competition')
 
-        # Classify every pair: TP/FP for rank 1, buckets for positives
+        # Tally positive pairs: hit (rank 1) vs miss (rank > 1), by head.
+        # Negatives are counted for context (denominator reporting) but we
+        # do not split them by head since the user's question is about
+        # positives specifically.
         for host, label, r in scored:
             head = r[1]
             rank = host_to_rank[host]
@@ -202,18 +200,18 @@ def _analyze_dataset(predictor, ds_name, ds_dir, emb_dict, pid_md5):
                 n_pos_pairs += 1
                 positive_by_bucket[_rank_bucket(rank)][head] += 1
                 if rank == 1:
-                    tp_head[head] += 1
+                    hit_head[head] += 1
+                else:
+                    miss_head[head] += 1
             else:
                 n_neg_pairs += 1
-                if rank == 1:
-                    fp_head[head] += 1
 
     return {
         'n_phages_scored': n_phages_scored,
         'n_pos_pairs': n_pos_pairs,
         'n_neg_pairs': n_neg_pairs,
-        'tp_head': tp_head,
-        'fp_head': fp_head,
+        'hit_head': hit_head,
+        'miss_head': miss_head,
         'positive_by_bucket': positive_by_bucket,
     }
 
@@ -226,8 +224,8 @@ def _print_ds_report(ds_name, r):
     n = r['n_phages_scored']
     n_pos = r['n_pos_pairs']
     n_neg = r['n_neg_pairs']
-    tp_total = sum(r['tp_head'].values())
-    fp_total = sum(r['fp_head'].values())
+    hit_total = sum(r['hit_head'].values())
+    miss_total = sum(r['miss_head'].values())
 
     print(f'=== {ds_name} — {n} scored phages, {n_pos} pos pairs, {n_neg} neg pairs ===')
     if not n:
@@ -235,29 +233,42 @@ def _print_ds_report(ds_name, r):
         print()
         return
 
-    # TP@1 = positive (label=1) pair at rank 1
-    tp_k = r['tp_head'].get('K', 0)
-    tp_o = r['tp_head'].get('O', 0)
-    tp_k_share = tp_k / tp_total if tp_total else 0.0
-    tp_o_share = tp_o / tp_total if tp_total else 0.0
-    print(f'  TP@1 (positive pair at rank 1): {tp_total}/{n_pos} = '
-          f'{(tp_total / n_pos if n_pos else 0):.3f}   [= HR@1]')
-    print(f'       K-driven: {tp_k:>4}  ({tp_k_share:.1%})')
-    print(f'       O-driven: {tp_o:>4}  ({tp_o_share:.1%})')
+    hit_k = r['hit_head'].get('K', 0)
+    hit_o = r['hit_head'].get('O', 0)
+    miss_k = r['miss_head'].get('K', 0)
+    miss_o = r['miss_head'].get('O', 0)
+
+    # HR@1 hit: positive pair at rank 1 — what we got right
+    hit_rate = hit_total / n_pos if n_pos else 0.0
+    hit_k_share = hit_k / hit_total if hit_total else 0.0
+    hit_o_share = hit_o / hit_total if hit_total else 0.0
+    print(f'  HR@1 hit  (positive at rank 1):  {hit_total}/{n_pos} = {hit_rate:.3f}')
+    print(f'       of the hits, K earned:  {hit_k:>4}  ({hit_k_share:.1%})')
+    print(f'       of the hits, O earned:  {hit_o:>4}  ({hit_o_share:.1%})')
     print()
 
-    # FP@1 = negative (label=0) pair at rank 1 (via ties)
-    fp_k = r['fp_head'].get('K', 0)
-    fp_o = r['fp_head'].get('O', 0)
-    fp_k_share = fp_k / fp_total if fp_total else 0.0
-    fp_o_share = fp_o / fp_total if fp_total else 0.0
-    print(f'  FP@1 (negative pair at rank 1): {fp_total}/{n_neg} = '
-          f'{(fp_total / n_neg if n_neg else 0):.3f}')
-    print(f'       K-driven: {fp_k:>4}  ({fp_k_share:.1%})')
-    print(f'       O-driven: {fp_o:>4}  ({fp_o_share:.1%})')
+    # HR@1 miss: positive pair at rank > 1 — what we got wrong, and which
+    # head was scoring the positive when the miss happened.
+    miss_rate = miss_total / n_pos if n_pos else 0.0
+    miss_k_share = miss_k / miss_total if miss_total else 0.0
+    miss_o_share = miss_o / miss_total if miss_total else 0.0
+    print(f'  HR@1 miss (positive at rank >1): {miss_total}/{n_pos} = {miss_rate:.3f}')
+    print(f'       of the misses, K was scoring:  {miss_k:>4}  ({miss_k_share:.1%})')
+    print(f'       of the misses, O was scoring:  {miss_o:>4}  ({miss_o_share:.1%})')
     print()
 
-    # Positive-pair rank distribution (keeps useful rank context)
+    # Per-head hit rate — directly answers "is K or O a more reliable scorer
+    # per positive pair it wins?"
+    k_total = hit_k + miss_k
+    o_total = hit_o + miss_o
+    k_hit_rate = hit_k / k_total if k_total else 0.0
+    o_hit_rate = hit_o / o_total if o_total else 0.0
+    print(f'  Per-head hit rate (of positives each head was scoring):')
+    print(f'       K: {hit_k}/{k_total} at rank 1 = {k_hit_rate:.3f}')
+    print(f'       O: {hit_o}/{o_total} at rank 1 = {o_hit_rate:.3f}')
+    print()
+
+    # Rank bucket distribution for the full positive population
     buckets = ['1', '2-5', '6-20', '>20']
     print(f'  Positive pair rank distribution — bucket × winning head:')
     print(f'    {"bucket":<8} {"K":>6} {"O":>6}  total')
