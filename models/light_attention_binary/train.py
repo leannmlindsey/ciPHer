@@ -136,7 +136,6 @@ def train_head(head_name, X_train, y_train, X_val, y_val, X_test, y_test,
             f'{sorted(_SUPPORTED_STRATEGIES)}.'
         )
 
-    embed_dim = int(model_cfg.get('embed_dim', 1280))
     pooler_cnn_width = int(model_cfg.get('pooler_cnn_width', 9))
     dropout = float(model_cfg.get('dropout', 0.1))
     lr = float(train_cfg.get('learning_rate', 5e-4))
@@ -151,13 +150,17 @@ def train_head(head_name, X_train, y_train, X_val, y_val, X_test, y_test,
     print(f'  Device: {device}')
     print(f'  Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}')
 
-    # Verify input shape from the first sample
-    input_dim = X_train[0].shape[1]
-    if input_dim != embed_dim:
+    # Derive embed_dim from the data; `model.embed_dim` in config is only a
+    # sanity check. This lets the same code handle ESM-2 650M (D=1280) and
+    # ProtT5-XL (D=1024) without a config change.
+    embed_dim = X_train[0].shape[1]
+    embed_dim_cfg = model_cfg.get('embed_dim')
+    if embed_dim_cfg is not None and int(embed_dim_cfg) != embed_dim:
         raise ValueError(
-            f'config model.embed_dim={embed_dim} does not match actual '
-            f'embedding dim {input_dim} from the embedding file.'
+            f'config model.embed_dim={embed_dim_cfg} does not match actual '
+            f'embedding dim {embed_dim} from the embedding file.'
         )
+    print(f'  embed_dim (auto-detected): {embed_dim}')
 
     model = LightAttentionBinary(
         embed_dim=embed_dim,

@@ -7,7 +7,11 @@
 # Override any of these via cipher-train CLI args.
 
 model:
-  embed_dim: 1280           # ESM-2 650M hidden size
+  # embed_dim is auto-detected from the first training sample; set to a
+  # specific value here (e.g. 1280 for ESM-2 650M, 1024 for ProtT5-XL) to
+  # enable a mismatch check. Leave null/unset to accept whatever the
+  # embedding file produces.
+  embed_dim: null
   pooler_cnn_width: 9       # ConvolutionalAttention kernel width
   dropout: 0.1
 

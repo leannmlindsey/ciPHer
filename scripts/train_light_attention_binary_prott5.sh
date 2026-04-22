@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 #
-# Submit a SLURM job on Delta-AI that trains the LightAttentionBinary model
-# (K head + O head, sequentially) on ESM-2 650M per-residue embeddings, then
-# runs cipher-evaluate on the resulting experiment.
+# Submit a SLURM job on Delta-AI that trains LightAttentionBinary (K head +
+# O head, sequentially) on ProtT5-XL per-residue (full) embeddings using
+# the highconf_pipeline_positive_K positive list, then runs cipher-evaluate.
 #
-# CIPHER_DIR (code + experiments + logs) is auto-detected from the script's
-# location. DATA_DIR (shared training/validation data) defaults to the main
-# worktree at /projects/bfzj/llindsey1/PHI_TSP/ciPHer/data so it doesn't
-# need to be duplicated per branch.
+# Why ProtT5: per agent 1's 2026-04-22 notes, ProtT5 separates K-types
+# ~8x better than ESM-2 in the within/between cosine-gap analysis, and
+# wins on PHL rh@1 in every attention_mlp sweep. This is the variant we
+# expect to move the PHL number.
+#
+# Filter rationale: same as the ESM-2 script — highconf_pipeline_positive_K
+# already encodes the cluster-level filter, so no --cluster_file or per-K
+# cap is passed. embed_dim auto-detects from data (1024 for ProtT5-XL).
 #
 # Usage:
-#   bash scripts/train_light_attention_binary.sh                 # submit
-#   DRY_RUN=1 bash scripts/train_light_attention_binary.sh       # print only
-#   NAME=my_run bash scripts/train_light_attention_binary.sh     # override run name
-#   LR=1e-4 BATCH_SIZE=16 bash scripts/train_light_attention_binary.sh
-#   DATA_DIR=/some/other/data bash scripts/train_light_attention_binary.sh
+#   bash scripts/train_light_attention_binary_prott5.sh              # submit
+#   DRY_RUN=1 bash scripts/train_light_attention_binary_prott5.sh    # preview
+#   NAME=my_run bash scripts/train_light_attention_binary_prott5.sh
 #
 
 set -euo pipefail
@@ -24,17 +26,14 @@ set -euo pipefail
 # ============================================================
 ACCOUNT="bfzj-dtai-gh"
 PARTITION="ghx4"
+# Use the prott5 conda env (has transformers); our model code only needs
+# torch + numpy so either env would work for training, but keeping
+# consistent with the extraction env that produced the NPZ.
 CONDA_ENV="${CONDA_ENV:-esmfold2}"
 
-# Auto-detect CIPHER_DIR from this script's location (repo root = dir
-# containing scripts/). Override with CIPHER_DIR=... to point elsewhere.
-# CIPHER_DIR is where code + experiments + logs live.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CIPHER_DIR="${CIPHER_DIR:-$(dirname "$SCRIPT_DIR")}"
 
-# DATA_DIR is the canonical data home on Delta — shared across all worktrees
-# / clones so we don't duplicate 10s of GB of TSVs + validation data. The
-# main worktree at /projects/bfzj/llindsey1/PHI_TSP/ciPHer holds the data.
 DATA_DIR="${DATA_DIR:-/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data}"
 
 GPUS="${GPUS:-1}"
@@ -50,21 +49,14 @@ GLYCAN_BINDERS="${GLYCAN_BINDERS:-${DATA_DIR}/training_data/metadata/glycan_bind
 VAL_FASTA="${VAL_FASTA:-${DATA_DIR}/validation_data/metadata/validation_rbps_all.faa}"
 VAL_DATASETS_DIR="${VAL_DATASETS_DIR:-${DATA_DIR}/validation_data/HOST_RANGE}"
 
-# Per-residue ESM-2 650M embeddings (variable-length, used by ConvAttn pooler).
-# Paths updated 2026-04-21 to the new full-coverage extraction; the old
-# /work/hdd/bfzj/llindsey1/embeddings_full/... file only covered ~4.5K MD5s
-# and left the model training on 14% of the filtered set.
-TRAIN_EMB="${TRAIN_EMB:-/work/hdd/bfzj/llindsey1/embeddings/esm2_650m_full/candidates_esm2_650m_full_md5.npz}"
-VAL_EMB="${VAL_EMB:-/work/hdd/bfzj/llindsey1/validation_embeddings/esm2_650m_full/validation_esm2_650m_full_md5.npz}"
-EMBEDDING_TYPE="${EMBEDDING_TYPE:-esm2_650m_full}"
+# Per-residue ProtT5-XL embeddings. Paths follow submit_extractions.sh
+# naming convention: ${EMB_ROOT}/${TAG}_${POOLING}/candidates_${LABEL}_md5.npz
+TRAIN_EMB="${TRAIN_EMB:-/work/hdd/bfzj/llindsey1/embeddings/prott5_xl_full/candidates_prott5_xl_full_md5.npz}"
+VAL_EMB="${VAL_EMB:-/work/hdd/bfzj/llindsey1/validation_embeddings/prott5_xl_full/validation_prott5_xl_full_md5.npz}"
+EMBEDDING_TYPE="${EMBEDDING_TYPE:-prott5_xl_full}"
 
-# Training-set filter and cluster-stratified downsampling (see
-# memory/project_training_filters.md). Default to the advisor's curated
-# positive list + 70%-identity cluster-stratified sampling — the combo
-# that improved PHL performance in the attention_mlp sweep.
-POSITIVE_LIST="${POSITIVE_LIST:-${DATA_DIR}/training_data/metadata/pipeline_positive.list}"
-CLUSTER_FILE="${CLUSTER_FILE:-${DATA_DIR}/training_data/metadata/candidates_clusters.tsv}"
-CLUSTER_THRESHOLD="${CLUSTER_THRESHOLD:-70}"
+# Training-set filter: highconf_pipeline_positive_K (12,481 proteins).
+POSITIVE_LIST="${POSITIVE_LIST:-${DATA_DIR}/training_data/metadata/highconf_pipeline_positive_K.list}"
 
 # ============================================================
 # Model / training config (overridable via env)
@@ -76,29 +68,26 @@ EPOCHS="${EPOCHS:-200}"
 PATIENCE="${PATIENCE:-30}"
 LABEL_STRATEGY="${LABEL_STRATEGY:-multi_label_threshold}"
 MIN_CLASS_SAMPLES="${MIN_CLASS_SAMPLES:-25}"
-MAX_SAMPLES_K="${MAX_SAMPLES_K:-1000}"
-MAX_SAMPLES_O="${MAX_SAMPLES_O:-3000}"
 MIN_SOURCES="${MIN_SOURCES:-1}"
 
-NAME="${NAME:-lab_${EMBEDDING_TYPE}_posList_cl${CLUSTER_THRESHOLD}}"
+NAME="${NAME:-lab_${EMBEDDING_TYPE}_highconf_pipeline}"
 DRY_RUN="${DRY_RUN:-0}"
 
 # ============================================================
 # Pre-submit sanity checks
 # ============================================================
 echo "============================================================"
-echo "LightAttentionBinary training job"
+echo "LightAttentionBinary training job (ProtT5-XL full)"
 echo "  Cipher dir:     ${CIPHER_DIR}"
 echo "  Run name:       ${NAME}"
 echo "  Embedding:      ${EMBEDDING_TYPE}"
 echo "  Train emb:      ${TRAIN_EMB}"
 echo "  Val emb:        ${VAL_EMB}"
 echo "  Positive list:  ${POSITIVE_LIST}"
-echo "  Cluster file:   ${CLUSTER_FILE} (threshold=${CLUSTER_THRESHOLD})"
 echo "============================================================"
 
 for f in "${TRAIN_EMB}" "${ASSOC_MAP}" "${GLYCAN_BINDERS}" "${VAL_FASTA}" \
-         "${POSITIVE_LIST}" "${CLUSTER_FILE}"; do
+         "${POSITIVE_LIST}"; do
     if [ ! -e "${f}" ] && [ "${DRY_RUN}" != "1" ]; then
         echo "ERROR: required path missing: ${f}" >&2
         exit 1
@@ -116,16 +105,12 @@ fi
 TRAIN_CMD="python -m cipher.cli.train_runner \
     --model ${MODEL} \
     --positive_list ${POSITIVE_LIST} \
-    --cluster_file ${CLUSTER_FILE} \
-    --cluster_threshold ${CLUSTER_THRESHOLD} \
     --lr ${LR} \
     --batch_size ${BATCH_SIZE} \
     --epochs ${EPOCHS} \
     --patience ${PATIENCE} \
     --label_strategy ${LABEL_STRATEGY} \
     --min_class_samples ${MIN_CLASS_SAMPLES} \
-    --max_samples_per_k ${MAX_SAMPLES_K} \
-    --max_samples_per_o ${MAX_SAMPLES_O} \
     --min_sources ${MIN_SOURCES} \
     --embedding_type ${EMBEDDING_TYPE} \
     --embedding_file ${TRAIN_EMB} \
@@ -161,9 +146,10 @@ cd ${CIPHER_DIR}
 export PYTHONPATH=${CIPHER_DIR}/src:\${PYTHONPATH:-}
 
 echo \"======================================\"
-echo \"LightAttentionBinary: ${NAME}\"
+echo \"LightAttentionBinary (ProtT5-XL full): ${NAME}\"
 echo \"  Train embeddings: ${TRAIN_EMB}\"
 echo \"  Val embeddings:   ${VAL_EMB}\"
+echo \"  Positive list:    ${POSITIVE_LIST}\"
 echo \"  Started: \$(date)\"
 echo \"======================================\"
 
