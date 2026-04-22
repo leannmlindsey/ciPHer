@@ -49,10 +49,12 @@ GLYCAN_BINDERS="${GLYCAN_BINDERS:-${DATA_DIR}/training_data/metadata/glycan_bind
 VAL_FASTA="${VAL_FASTA:-${DATA_DIR}/validation_data/metadata/validation_rbps_all.faa}"
 VAL_DATASETS_DIR="${VAL_DATASETS_DIR:-${DATA_DIR}/validation_data/HOST_RANGE}"
 
-# Per-residue ProtT5-XL embeddings. Paths follow submit_extractions.sh
-# naming convention: ${EMB_ROOT}/${TAG}_${POOLING}/candidates_${LABEL}_md5.npz
-TRAIN_EMB="${TRAIN_EMB:-/work/hdd/bfzj/llindsey1/embeddings/prott5_xl_full/candidates_prott5_xl_full_md5.npz}"
-VAL_EMB="${VAL_EMB:-/work/hdd/bfzj/llindsey1/validation_embeddings/prott5_xl_full/validation_prott5_xl_full_md5.npz}"
+# Per-residue ProtT5-XL embeddings. Actual paths on Delta as of 2026-04-22
+# (the split-fasta extraction pipeline output these directly under
+# /work/hdd/bfzj/llindsey1/ rather than the embeddings/ subtree used by
+# other families). ~137 GB NPZ; ghx4 with --mem=0 has the RAM to load it.
+TRAIN_EMB="${TRAIN_EMB:-/work/hdd/bfzj/llindsey1/prott5_xl_full/candidates_prott5_xl_full_md5.npz}"
+VAL_EMB="${VAL_EMB:-/work/hdd/bfzj/llindsey1/validation_prott5_xl_full/validation_prott5_xl_full_md5.npz}"
 EMBEDDING_TYPE="${EMBEDDING_TYPE:-prott5_xl_full}"
 
 # Training-set filter: highconf_pipeline_positive_K (12,481 proteins).
