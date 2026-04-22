@@ -9,7 +9,7 @@
 # Embeddings are NOT included — regenerate from scripts/ on the target.
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 DIST="$REPO/dist"
 mkdir -p "$DIST"
 cd "$REPO"
@@ -25,6 +25,8 @@ TRAIN_FILES=(
   data/training_data/metadata/glycan_binders_custom.tsv
   data/training_data/metadata/host_phage_protein_map.tsv
   data/training_data/metadata/candidates_clusters.tsv
+  data/training_data/metadata/highconf_tsp_K.list
+  data/training_data/metadata/highconf_pipeline_positive_K.list
 )
 
 VAL_FILES=(
