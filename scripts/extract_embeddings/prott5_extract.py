@@ -41,10 +41,12 @@ except ImportError:
 
 
 def pool_residue_embeddings(residue_embeddings, pooling):
-    """Pool a (L, D) tensor down to either (D,) or (N*D,).
+    """Pool a (L, D) tensor down to either (D,), (N*D,), or keep as (L, D).
 
     Supported pooling:
         'mean'       -> mean across the length axis, returns (D,)
+        'full'       -> no pooling; return the per-residue (L, D) tensor
+                        as-is, for downstream Light Attention.
         'segmentsN'  -> split into N equal segments (remainder to the
                         N-terminal), mean-pool each, concat to (N*D,).
                         For sequences shorter than N, missing slots are
@@ -52,6 +54,9 @@ def pool_residue_embeddings(residue_embeddings, pooling):
     """
     if pooling == 'mean':
         return residue_embeddings.mean(dim=0)
+
+    if pooling == 'full':
+        return residue_embeddings
 
     if pooling.startswith('segments'):
         n_segments = int(pooling.replace('segments', ''))
@@ -82,7 +87,7 @@ def pool_residue_embeddings(residue_embeddings, pooling):
         return torch.cat(seg_means, dim=0)
 
     raise ValueError(
-        f"Unknown pooling: {pooling!r}. Use 'mean' or 'segmentsN' (any N>=2).")
+        f"Unknown pooling: {pooling!r}. Use 'mean', 'full', or 'segmentsN' (any N>=2).")
 
 
 def parse_fasta(filepath):
@@ -119,7 +124,8 @@ def main():
     parser.add_argument("--half_precision", action="store_true",
                         help="Use float16 for inference (saves GPU memory)")
     parser.add_argument("--pooling", default="mean",
-                        help="Pooling strategy: 'mean' (default, D-dim output) "
+                        help="Pooling strategy: 'mean' (default, D-dim output), "
+                             "'full' (per-residue L×D matrix, for Light Attention), "
                              "or 'segmentsN' for any N>=2 (N*D-dim output). "
                              "Example: --pooling segments4")
     parser.add_argument("--checkpoint_every", type=int, default=2000,
@@ -130,8 +136,8 @@ def main():
     args = parser.parse_args()
 
     # Validate pooling early
-    if args.pooling != 'mean' and not args.pooling.startswith('segments'):
-        sys.exit(f"ERROR: invalid --pooling {args.pooling!r}. Use 'mean' or 'segmentsN'.")
+    if args.pooling not in ('mean', 'full') and not args.pooling.startswith('segments'):
+        sys.exit(f"ERROR: invalid --pooling {args.pooling!r}. Use 'mean', 'full', or 'segmentsN'.")
 
     if not Path(args.input_fasta).exists():
         sys.exit(f"ERROR: {args.input_fasta} not found")
@@ -314,9 +320,10 @@ def main():
     if oom_skipped:
         print(f"  OOM-skipped sequences: {oom_skipped:,}")
 
-    # Verify dimensions
+    # Verify dimensions. For 'full' pooling each value is (L, D) with
+    # varying L, so report the embedding dim via the last axis.
     first_key = next(iter(embeddings_dict))
-    emb_dim = embeddings_dict[first_key].shape[0]
+    emb_dim = embeddings_dict[first_key].shape[-1]
     print(f"  Embedding dimension: {emb_dim}")
 
     # Save
