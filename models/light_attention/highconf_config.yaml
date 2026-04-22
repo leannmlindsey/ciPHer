@@ -1,0 +1,63 @@
+# Light Attention — "highconf" profile.
+#
+# Mirrors scripts/run_highconf_experiment.sh (attention_mlp + ProtT5 mean +
+# highconf_pipeline_positive_K.list) so LA results are directly comparable
+# to the team's current best (PHL rh@1 = 0.188 as of 2026-04-22).
+#
+# Key difference vs sweep_config.yaml: NO downsampling caps. The highconf
+# positive list is already cluster-filtered (via cl60), so max_samples_per_k
+# / max_samples_per_o would re-filter on top and throw away high-confidence
+# training data we want to keep.
+#
+# Use via:
+#   cipher-train --model light_attention \
+#       --config models/light_attention/highconf_config.yaml \
+#       --positive_list data/training_data/metadata/highconf_pipeline_positive_K.list \
+#       --embedding_type <name> --embedding_file <path> --n_segments <N>
+
+model:
+  # First layer projects 2*D (LA pooled dim) -> 2560. Works for both D=1024
+  # (ProtT5) and D=1280 (ESM-2) without changes.
+  hidden_dims: [2560, 1280, 640, 320, 160]
+  attention_dim: 640
+  dropout: 0.1
+
+light_attention:
+  kernel_size: 9
+  conv_dropout: 0.25
+
+training:
+  # LA has padding overhead on variable-length inputs so batch is smaller
+  # than attention_mlp's highconf run (which used 512 on fixed-D vectors).
+  batch_size: 32
+  learning_rate: 0.00001
+  epochs: 1000
+  patience: 30
+  seed: 42
+  train_ratio: 0.7
+  val_ratio: 0.15
+  use_pos_weight: true
+
+data:
+  association_map: data/training_data/metadata/host_phage_protein_map.tsv
+  glycan_binders: data/training_data/metadata/glycan_binders_custom.tsv
+  # Launcher overrides these three per embedding variant.
+  embedding_type: esm2_650m_seg4
+  embedding_file: data/training_data/embeddings/esm2_650m_seg4_md5.npz
+  n_segments: 4
+
+validation:
+  val_fasta: data/validation_data/metadata/validation_rbps_all.faa
+  val_embedding_file: data/validation_data/embeddings/esm2_650m_seg4_md5.npz
+  val_datasets_dir: data/validation_data/HOST_RANGE
+
+experiment:
+  # No tools filter — launcher passes --positive_list which clears tools.
+  tools: null
+  exclude_tools: null
+  min_sources: 1
+  min_class_samples: 25
+  # NO max_samples_per_k / max_samples_per_o here. The highconf list is
+  # already cluster-filtered; capping would discard good training data.
+  label_strategy: multi_label_threshold
+  single_label: false

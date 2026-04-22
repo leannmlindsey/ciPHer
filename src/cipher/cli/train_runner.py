@@ -117,6 +117,12 @@ def apply_overrides(config, args):
         config.setdefault('data', {})['embedding_type'] = args.embedding_type
     if args.embedding_file is not None:
         config.setdefault('data', {})['embedding_file'] = args.embedding_file
+    if args.n_segments is not None:
+        # 0 means "no reshape — already 2D per-residue" (passed as --n_segments 0
+        # from the launcher). Anything >0 triggers the (N*D,) -> (N, D) reshape
+        # inside models/light_attention/train.py and predict.py.
+        config.setdefault('data', {})['n_segments'] = (
+            None if args.n_segments == 0 else args.n_segments)
     if args.embedding_type_2 is not None:
         config.setdefault('data', {})['embedding_type_2'] = args.embedding_type_2
     if args.embedding_file_2 is not None:
@@ -446,6 +452,12 @@ Examples:
                         help=f'Path to training embedding NPZ file. Overrides the '
                              f'default path derived from embedding_type. '
                              f'(default: {fmt(d_data.get("embedding_file"))})')
+    parser.add_argument('--n_segments', type=int,
+                        help='Number of segments for flattened (N*D,) segmented '
+                             'embeddings (used by light_attention to reshape to '
+                             '(N, D)). Pass 0 to explicitly disable reshape for '
+                             'already-2D per-residue files. '
+                             f'(default: {fmt(d_data.get("n_segments"), "none")})')
     parser.add_argument('--embedding_type_2',
                         help='Optional second embedding type label (e.g. '
                              'kmer_aa20_k4). When set along with '
