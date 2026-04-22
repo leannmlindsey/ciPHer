@@ -1,0 +1,5 @@
+# cipher_training_data.zip
+# Generated: 2026-04-22T01:02:53Z
+# Training inputs (raw only — no embeddings).
+# Verify on Delta-AI:  cd <extract_dir> && shasum -a 256 -c MANIFEST.txt
+
