@@ -72,11 +72,18 @@ for fasta in "${SPLIT_FASTA}"/*.faa; do
 
     N_SEQS=$(grep -c "^>" "$fasta" || true)
 
-    # Memory / time scale with bin size; larger bins need more
+    # Memory / time scale with bin size. Key constraint: esm2_extract.py
+    # builds the full per-residue output dict in memory before a single
+    # np.savez_compressed, so MEM must exceed the total output size.
+    # Empirical output sizes (from the five already-completed bins):
+    #   maxlen128  ~1.4 GB ;  maxlen256  ~23 GB  ;  maxlen2048  ~85 GB
+    #   maxlen4096 ~111 GB ;  maxlen8192 ~75 GB
+    # Estimated maxlen1024 output: ~234 GB -> requires full-node (mem=0).
+    GPUS_PER_NODE=1
     if [ "$MAX_LEN" -le 512 ]; then
-        MEM="64G"; TIME="8:00:00"
+        MEM="96G"; TIME="8:00:00"
     elif [ "$MAX_LEN" -le 1024 ]; then
-        MEM="128G"; TIME="18:00:00"
+        MEM="0"; TIME="24:00:00"; GPUS_PER_NODE=4
     elif [ "$MAX_LEN" -le 2048 ]; then
         MEM="192G"; TIME="24:00:00"
     else
@@ -93,7 +100,7 @@ for fasta in "${SPLIT_FASTA}"/*.faa; do
 #SBATCH --job-name=${JOB_NAME}
 #SBATCH --account=${ACCOUNT}
 #SBATCH --partition=${PARTITION}
-#SBATCH --gpus-per-node=1
+#SBATCH --gpus-per-node=${GPUS_PER_NODE}
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=${MEM}
 #SBATCH --time=${TIME}
