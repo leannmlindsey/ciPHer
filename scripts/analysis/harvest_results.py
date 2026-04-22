@@ -1,16 +1,37 @@
 """Harvest every experiment's metadata + results into one wide CSV.
 
-Scans experiments/*/*/ for runs with results/evaluation.json and produces
-results/experiment_log.csv — one row per run, sorted by PHL+PBIP combined
-HR@1 (descending). The CSV is committed to git so the results log is
-permanent and auditable.
+Scans one or more experiments roots for runs with results/evaluation.json
+and produces results/experiment_log.csv — one row per run, sorted by
+PHL+PBIP combined HR@1 (descending). The CSV is committed to git so the
+results log is permanent and auditable.
+
+When working with multiple parallel worktrees (one per model architecture),
+pass each worktree's experiments directory via --experiments-dir so the
+CSV aggregates results across all of them.
 
 Idempotent: rerunning rebuilds the CSV from scratch. To reproduce any row,
 check out its git_commit and run with the saved config.yaml.
 
 Usage:
+    # Local experiments only (default):
     python scripts/analysis/harvest_results.py
-    python scripts/analysis/harvest_results.py --model attention_mlp --out results/experiment_log.csv
+
+    # Aggregate across any number of worktree experiments directories:
+    python scripts/analysis/harvest_results.py --experiments-dirs \\
+        experiments \\
+        /u/llindsey1/llindsey/PHI_TSP/cipher-light-attention/experiments \\
+        /u/llindsey1/llindsey/PHI_TSP/cipher-light-attention-binary/experiments
+
+    # With shell globbing to pick up every sibling worktree automatically:
+    python scripts/analysis/harvest_results.py --experiments-dirs \\
+        experiments ../cipher-*/experiments
+
+    # Labels can be supplied explicitly with label=path:
+    python scripts/analysis/harvest_results.py --experiments-dirs \\
+        main=experiments la=../cipher-light-attention/experiments
+
+    # Filter to a specific model across all worktrees:
+    python scripts/analysis/harvest_results.py --model light_attention --experiments-dirs ...
 """
 
 import argparse
@@ -34,7 +55,7 @@ def _num(v):
     return v if isinstance(v, (int, float)) else None
 
 
-def extract_row(exp_dir):
+def extract_row(exp_dir, source_label=''):
     name = os.path.basename(exp_dir.rstrip('/'))
     model = os.path.basename(os.path.dirname(exp_dir.rstrip('/')))
     exp = _safe_load(os.path.join(exp_dir, 'experiment.json'))
@@ -50,6 +71,8 @@ def extract_row(exp_dir):
     row = {
         'run_name': name,
         'model': model,
+        'source': source_label,       # worktree / experiments-root label
+        'exp_dir': exp_dir,           # absolute or relative path to the run
         'timestamp': exp.get('timestamp', ''),
         'git_commit': prov.get('git_commit', ''),
         'git_dirty': prov.get('git_dirty', ''),
@@ -117,29 +140,59 @@ def main():
     p.add_argument('--model', default='*',
                    help='Model dir glob (default: all models)')
     p.add_argument('--out', default='results/experiment_log.csv')
+    p.add_argument('--experiments-dirs', nargs='+', default=None,
+                   help='Space-separated list of experiments root '
+                        'directories to aggregate over. Each entry is '
+                        'either a bare path or <label>=<path>; bare '
+                        'paths auto-derive a label from the parent '
+                        'directory. Shell globs (e.g. ../cipher-*/experiments) '
+                        'are expanded before this script sees them. '
+                        'Defaults to the local ./experiments only.')
     args = p.parse_args()
 
-    pattern = f'experiments/{args.model}/*/results/evaluation.json'
-    eval_paths = sorted(glob(pattern))
-    exp_dirs = [os.path.dirname(os.path.dirname(p)) for p in eval_paths]
+    # Parse entries as optional "label=path" pairs.
+    roots = []
+    entries = args.experiments_dirs if args.experiments_dirs else ['experiments']
+    for entry in entries:
+        if '=' in entry:
+            label, path = entry.split('=', 1)
+        else:
+            path = entry
+            # Derive label from the parent directory name (e.g.
+            # "../cipher-light-attention/experiments" -> "cipher-light-attention").
+            parent = os.path.basename(os.path.dirname(os.path.abspath(path)))
+            label = parent or 'local'
+        roots.append((label, os.path.expanduser(path)))
 
-    if not exp_dirs:
-        print(f'No evaluated experiments found under experiments/{args.model}/')
+    all_rows = []
+    for label, root in roots:
+        pattern = os.path.join(root, args.model, '*', 'results',
+                               'evaluation.json')
+        eval_paths = sorted(glob(pattern))
+        exp_dirs = [os.path.dirname(os.path.dirname(p)) for p in eval_paths]
+        if not exp_dirs:
+            print(f'  [{label}] no evaluated experiments under {root}/{args.model}/')
+            continue
+        print(f'  [{label}] {len(exp_dirs)} runs under {root}/')
+        for d in exp_dirs:
+            all_rows.append(extract_row(d, source_label=label))
+
+    if not all_rows:
+        print('No evaluated experiments found in any supplied root.')
         return
-
-    rows = [extract_row(d) for d in exp_dirs]
 
     def sort_key(r):
         v = r.get('phl_pbip_combined_hr1', '')
         return -v if isinstance(v, (int, float)) else 1.0
-    rows.sort(key=sort_key)
+    all_rows.sort(key=sort_key)
 
     os.makedirs(os.path.dirname(args.out) or '.', exist_ok=True)
     with open(args.out, 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer = csv.DictWriter(f, fieldnames=list(all_rows[0].keys()))
         writer.writeheader()
-        writer.writerows(rows)
-    print(f'Wrote {args.out} ({len(rows)} rows)')
+        writer.writerows(all_rows)
+    print(f'Wrote {args.out} ({len(all_rows)} rows across '
+          f'{len(roots)} experiments root{"s" if len(roots) != 1 else ""})')
 
 
 if __name__ == '__main__':

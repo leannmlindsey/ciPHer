@@ -389,7 +389,7 @@ def get_protein_embedding(sequence, model, alphabet, device, layer, max_length=1
     # Mean pool across sequence length to get single vector per protein
     mean_pooled_embedding = sequence_embeddings.mean(dim=0)  # Shape: (embedding_dim,)
     return mean_pooled_embedding.cpu().numpy()
-def process_fasta_file(fasta_file, model, alphabet, device, layer, max_length=1024, model_name=None, key_by_md5=False, pooling="mean"):
+def process_fasta_file(fasta_file, model, alphabet, device, layer, max_length=1024, model_name=None, key_by_md5=False, pooling="mean", embeddings_data=None, partial_path=None, checkpoint_every=2000):
     """
     Process all sequences in a FASTA file and generate embeddings.
 
@@ -403,8 +403,15 @@ def process_fasta_file(fasta_file, model, alphabet, device, layer, max_length=10
         model_name: Name of the model (for type detection)
         key_by_md5: If True, key embeddings by MD5(sequence) instead of accession.
                     Sequences with the same MD5 are embedded only once.
+        embeddings_data: Optional pre-loaded dict (from a prior .partial.npz).
+                        Keys already present are skipped.
+        partial_path: If set, write a .partial.npz checkpoint here every
+                      `checkpoint_every` newly-embedded sequences so the job
+                      can resume on restart.
+        checkpoint_every: Interval (in new embeddings) between partial saves.
     """
-    embeddings_data = {}
+    if embeddings_data is None:
+        embeddings_data = {}
 
     # Detect model type for proper embedding extraction
     model_type = detect_model_type(model_name) if model_name else None
@@ -422,10 +429,15 @@ def process_fasta_file(fasta_file, model, alphabet, device, layer, max_length=10
     total_sequences = len(sequences)
 
     print(f"Found {total_sequences} sequences")
+    if embeddings_data:
+        print(f"Resuming with {len(embeddings_data)} already-embedded sequences loaded from partial")
 
-    # If keying by MD5, pre-compute to skip duplicate sequences
-    seen_md5s = set()
+    # Seed seen-key set with what we've already embedded so resume is correct
+    # for both MD5 and accession keying.
+    seen_keys = set(embeddings_data.keys())
     skipped_duplicates = 0
+    skipped_resumed = 0
+    since_last_checkpoint = 0
 
     # Create progress bar
     progress_bar = tqdm(sequences, desc="Generating embeddings", unit="seq")
@@ -436,12 +448,20 @@ def process_fasta_file(fasta_file, model, alphabet, device, layer, max_length=10
 
         if key_by_md5:
             md5 = hashlib.md5(sequence.encode()).hexdigest()
-            if md5 in seen_md5s:
-                skipped_duplicates += 1
+            if md5 in seen_keys:
+                # Either an intra-FASTA duplicate or already done in a prior run
+                if md5 in embeddings_data:
+                    skipped_resumed += 1
+                else:
+                    skipped_duplicates += 1
                 continue
-            seen_md5s.add(md5)
+            seen_keys.add(md5)
             key = md5
         else:
+            if accession in seen_keys:
+                skipped_resumed += 1
+                continue
+            seen_keys.add(accession)
             key = accession
 
         # Update progress bar description with current accession
@@ -451,12 +471,20 @@ def process_fasta_file(fasta_file, model, alphabet, device, layer, max_length=10
         try:
             embedding = get_protein_embedding(sequence, model, alphabet, device, layer, max_length, model_type, pooling)
             embeddings_data[key] = embedding
+            since_last_checkpoint += 1
         except Exception as e:
             tqdm.write(f"Error processing {accession}: {str(e)}")
             continue
 
+        if partial_path and checkpoint_every and since_last_checkpoint >= checkpoint_every:
+            tqdm.write(f"Checkpointing {len(embeddings_data)} embeddings to {partial_path}")
+            np.savez(partial_path, **embeddings_data)
+            since_last_checkpoint = 0
+
     progress_bar.close()
     print(f"Successfully processed {len(embeddings_data)}/{total_sequences} sequences")
+    if skipped_resumed:
+        print(f"Skipped {skipped_resumed} already-embedded sequences from partial checkpoint")
     if key_by_md5:
         print(f"Skipped {skipped_duplicates} duplicate sequences (same MD5)")
 
@@ -568,6 +596,14 @@ def main():
              "'full' (per-residue L×D matrix), or "
              "'segments4' (4 segment means from C-terminal, 4×D vector). "
              "Use 'segmentsN' for N segments."
+    )
+    parser.add_argument(
+        "--checkpoint_every",
+        type=int,
+        default=2000,
+        help="Write a .partial.npz checkpoint every N newly-embedded sequences "
+             "so a killed/OOM job can resume without redoing work. "
+             "Set to 0 to disable."
     )
 
     args = parser.parse_args()
@@ -686,20 +722,50 @@ def main():
                 print(f"Error: Layer {layer} is out of range. Model has layers 0-{model.num_layers}")
                 sys.exit(1)
 
+    # Resolve output + partial paths up front so resume works
+    output_npz = args.output_csv.replace('.csv', '.npz')
+    partial_path = output_npz + ".partial.npz"
+
+    # Load prior partial if present so a killed job picks up where it left off
+    embeddings_data = {}
+    if os.path.exists(partial_path):
+        print(f"Found partial checkpoint: {partial_path}")
+        try:
+            prev = np.load(partial_path)
+            for k in prev.files:
+                embeddings_data[k] = prev[k]
+            print(f"Loaded {len(embeddings_data)} embeddings from partial")
+        except Exception as e:
+            print(f"WARNING: could not load partial ({e}); starting fresh")
+            embeddings_data = {}
+
     # Process FASTA file
     try:
-        embeddings_data = process_fasta_file(args.input_fasta, model, alphabet, device, layer, max_length, loaded_model_name, key_by_md5=args.key_by_md5, pooling=args.pooling)
+        embeddings_data = process_fasta_file(
+            args.input_fasta, model, alphabet, device, layer, max_length,
+            loaded_model_name, key_by_md5=args.key_by_md5, pooling=args.pooling,
+            embeddings_data=embeddings_data, partial_path=partial_path,
+            checkpoint_every=args.checkpoint_every,
+        )
     except Exception as e:
         print(f"Error processing FASTA file: {str(e)}")
+        # Leave partial in place for resume
         sys.exit(1)
 
     # Save results
     try:
-        output_npz = args.output_csv.replace('.csv', '.npz')
         save_embeddings_to_npz(embeddings_data, output_npz)
     except Exception as e:
         print(f"Error saving results: {str(e)}")
         sys.exit(1)
+
+    # Success: remove partial so a future rerun doesn't resurrect stale state
+    if os.path.exists(partial_path):
+        try:
+            os.remove(partial_path)
+            print(f"Removed partial checkpoint: {partial_path}")
+        except OSError as e:
+            print(f"WARNING: could not remove partial {partial_path}: {e}")
 
     print("Done!")
 
