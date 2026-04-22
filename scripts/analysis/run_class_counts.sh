@@ -19,8 +19,8 @@ CONDA_ENV="${CONDA_ENV:-esmfold2}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CIPHER_DIR="${CIPHER_DIR:-$(dirname "$(dirname "$SCRIPT_DIR")")}"
 
-# Tiny job — no GPU needed for file reads. Still queued on ghx4 for simplicity.
-GPUS=0
+# Tiny job — no GPU actually used, but Delta AI requires >=1 GPU per job.
+GPUS=1
 CPUS=2
 MEM="4G"
 TIME="00:10:00"
@@ -33,6 +33,7 @@ JOB_SCRIPT="#!/bin/bash
 #SBATCH --job-name=${JOB_NAME}
 #SBATCH --account=${ACCOUNT}
 #SBATCH --partition=${PARTITION}
+#SBATCH --gpus-per-node=${GPUS}
 #SBATCH --cpus-per-task=${CPUS}
 #SBATCH --mem=${MEM}
 #SBATCH --time=${TIME}
