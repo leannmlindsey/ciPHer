@@ -112,6 +112,20 @@ def apply_overrides(config, args):
     if args.dropout is not None:
         config.setdefault('model', {})['dropout'] = args.dropout
 
+    # Contrastive-encoder-specific overrides (ignored by other models)
+    if args.lambda_k is not None:
+        config.setdefault('training', {})['lambda_k'] = args.lambda_k
+    if args.lambda_o is not None:
+        config.setdefault('training', {})['lambda_o'] = args.lambda_o
+    if args.arcface_margin is not None:
+        config.setdefault('arcface', {})['margin'] = args.arcface_margin
+    if args.arcface_scale is not None:
+        config.setdefault('arcface', {})['scale'] = args.arcface_scale
+    if args.sampler_hard_negative_mining is not None:
+        config.setdefault('sampler', {})['hard_negative_mining'] = args.sampler_hard_negative_mining
+    if args.sampler_hard_negative_start_epoch is not None:
+        config.setdefault('sampler', {})['hard_negative_start_epoch'] = args.sampler_hard_negative_start_epoch
+
     # Embedding overrides
     if args.embedding_type is not None:
         config.setdefault('data', {})['embedding_type'] = args.embedding_type
@@ -419,6 +433,31 @@ Examples:
                         help=f'SE attention bottleneck dim (default: {fmt(d_model.get("attention_dim"))})')
     parser.add_argument('--dropout', type=float,
                         help=f'Dropout rate (default: {fmt(d_model.get("dropout"))})')
+
+    # Contrastive-encoder-specific (ignored by other models)
+    d_train = base_cfg.get('training', {})
+    d_arc = base_cfg.get('arcface', {})
+    d_samp = base_cfg.get('sampler', {})
+    parser.add_argument('--lambda_k', type=float,
+                        help=f'Contrastive encoder: K-head loss weight. Set 0 to disable. '
+                             f'(default: {fmt(d_train.get("lambda_k"))})')
+    parser.add_argument('--lambda_o', type=float,
+                        help=f'Contrastive encoder: O-head loss weight. Set 0 to disable. '
+                             f'(default: {fmt(d_train.get("lambda_o"))})')
+    parser.add_argument('--arcface_margin', type=float,
+                        help=f'Contrastive encoder: ArcFace additive angular margin '
+                             f'(default: {fmt(d_arc.get("margin"))})')
+    parser.add_argument('--arcface_scale', type=float,
+                        help=f'Contrastive encoder: ArcFace scale '
+                             f'(default: {fmt(d_arc.get("scale"))})')
+    parser.add_argument('--sampler_hard_negative_mining',
+                        type=lambda s: s.lower() in ('1', 'true', 'yes'),
+                        help='Contrastive encoder: enable prototype-based hard-negative '
+                             'class sampling in PK sampler (true/false).')
+    parser.add_argument('--sampler_hard_negative_start_epoch', type=int,
+                        help=f'Contrastive encoder: epoch to switch from uniform to '
+                             f'hard-negative class sampling. '
+                             f'(default: {fmt(d_samp.get("hard_negative_start_epoch"))})')
 
     # Embedding
     parser.add_argument('--embedding_type',
