@@ -3,7 +3,7 @@
 # SLURM wrapper for scripts/analysis/decision_breakdown.py.
 # Submits one GPU job that runs the per-decision breakdown (which head drove
 # each max score) on every run_dir passed as an argument. Defaults to all
-# la_seg4_* experiments under experiments/light_attention/.
+# la_* experiments under experiments/light_attention/.
 #
 # Usage:
 #   bash scripts/analysis/run_decision_breakdown.sh
@@ -29,14 +29,14 @@ if [ $# -gt 0 ]; then
     RUN_DIRS=("$@")
 else
     RUN_DIRS=()
-    for d in "${CIPHER_DIR}/experiments/light_attention"/la_seg4_*/; do
+    for d in "${CIPHER_DIR}/experiments/light_attention"/la_*/; do
         [ -d "$d" ] || continue
         RUN_DIRS+=("${d%/}")
     done
 fi
 
 if [ ${#RUN_DIRS[@]} -eq 0 ]; then
-    echo "ERROR: no run_dirs given and no la_seg4_* experiments found under ${CIPHER_DIR}/experiments/light_attention/" >&2
+    echo "ERROR: no run_dirs given and no la_* experiments found under ${CIPHER_DIR}/experiments/light_attention/" >&2
     exit 1
 fi
 

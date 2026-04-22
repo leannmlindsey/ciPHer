@@ -3,11 +3,11 @@
 # SLURM wrapper for scripts/analysis/eval_per_head.py.
 # Submits one GPU job that runs the per-head (K / O / both) evaluation on
 # every run_dir passed as an argument. If no args are given, defaults to all
-# la_seg4_* directories under experiments/light_attention/.
+# la_* directories under experiments/light_attention/.
 #
 # Usage:
 #   bash scripts/analysis/run_eval_per_head.sh
-#       # evaluate every la_seg4_* experiment sequentially in one job
+#       # evaluate every la_* experiment sequentially in one job
 #
 #   bash scripts/analysis/run_eval_per_head.sh experiments/light_attention/la_seg4_match_sweep
 #       # evaluate a single run
@@ -41,16 +41,16 @@ DRY_RUN="${DRY_RUN:-0}"
 if [ $# -gt 0 ]; then
     RUN_DIRS=("$@")
 else
-    # Default: every la_seg4_* run that has results/evaluation.json
+    # Default: every la_* run that has results/evaluation.json
     RUN_DIRS=()
-    for d in "${CIPHER_DIR}/experiments/light_attention"/la_seg4_*/; do
+    for d in "${CIPHER_DIR}/experiments/light_attention"/la_*/; do
         [ -d "$d" ] || continue
         RUN_DIRS+=("${d%/}")
     done
 fi
 
 if [ ${#RUN_DIRS[@]} -eq 0 ]; then
-    echo "ERROR: no run_dirs given and no la_seg4_* experiments found under ${CIPHER_DIR}/experiments/light_attention/" >&2
+    echo "ERROR: no run_dirs given and no la_* experiments found under ${CIPHER_DIR}/experiments/light_attention/" >&2
     exit 1
 fi
 
