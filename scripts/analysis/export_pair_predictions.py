@@ -42,7 +42,22 @@ import numpy as np
 import yaml
 
 
-# Runner + ranking functions live in the installed cipher package
+# Make the `cipher` package importable when run from a checkout without
+# `pip install -e .` (common on HPC login nodes). Walks up from this
+# file until it finds a `src/cipher/` directory, then prepends `src/`.
+def _ensure_cipher_on_path():
+    here = Path(__file__).resolve().parent
+    for parent in [here, *here.parents]:
+        candidate = parent / 'src' / 'cipher'
+        if candidate.is_dir():
+            src = str(parent / 'src')
+            if src not in sys.path:
+                sys.path.insert(0, src)
+            return
+    # Fall through: let the ImportError below surface with a helpful hint.
+
+_ensure_cipher_on_path()
+
 from cipher.evaluation.runner import load_predictor, load_validation_data
 from cipher.evaluation.ranking import rank_hosts, _ranks_with_ties
 from cipher.data.interactions import (
