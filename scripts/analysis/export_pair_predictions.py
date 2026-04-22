@@ -205,8 +205,9 @@ def main():
         sys.exit(f'ERROR: {args.experiment_dir} is not a directory')
 
     paths = _resolve_val_paths(args.experiment_dir, args)
-    for key, val in paths.items():
-        if not val:
+    # emb2 is optional (only needed for concat / dual-NPZ training runs)
+    for key in ('fasta', 'emb', 'ds_dir'):
+        if not paths.get(key):
             sys.exit(f'ERROR: missing validation path {key!r}; '
                      f'pass via CLI or put in config.yaml:validation')
 
