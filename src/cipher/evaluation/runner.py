@@ -345,6 +345,14 @@ def main():
              'for the K head having ~7x more classes than O. '
              '"raw" compares raw probabilities (legacy; biased toward O).')
     parser.add_argument(
+        '--head-mode', choices=['both', 'k_only', 'o_only'], default='both',
+        help='Which head(s) participate in scoring. '
+             '"both" (default) uses combined max-over-heads. '
+             '"k_only" / "o_only" disable the other head entirely — useful '
+             'because optimal mode is per-dataset (see '
+             'notes/findings/2026-04-23_head_eval_phage_breadth.md). '
+             'Supersedes the eval_per_head.py monkey-patch approach.')
+    parser.add_argument(
         '--output', '-o',
         help='Save results JSON to this path (default: {run_dir}/results/evaluation.json)')
     parser.add_argument(
@@ -359,6 +367,7 @@ def main():
         print(f'Loading predictor from {run_dir}')
     predictor = load_predictor(run_dir)
     predictor.score_normalization = args.score_norm
+    predictor.head_mode = args.head_mode
 
     if verbose:
         print(f'  Embedding type: {predictor.embedding_type}')
@@ -425,6 +434,7 @@ def main():
     serializable = {'_meta': {
         'tie_method': args.tie_method,
         'score_norm': args.score_norm,
+        'head_mode': args.head_mode,
         'max_k': args.max_k,
     }}
     for ds_name, ds_results in results.items():

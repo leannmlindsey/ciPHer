@@ -29,6 +29,16 @@ class Predictor(ABC):
     #                     whichever head has fewer classes).
     score_normalization = 'zscore'
 
+    # Which head(s) participate in scoring. Set via cipher-evaluate --head-mode.
+    # 'both'    (default): use K and O heads as before; max-over-heads-per-protein.
+    # 'k_only':            ignore the O head entirely, rank on K alone.
+    # 'o_only':            ignore the K head entirely, rank on O alone.
+    #
+    # Per-dataset best mode is determined by the dataset's phage breadth and
+    # ranking direction — see notes/findings/2026-04-23_head_eval_phage_breadth.md
+    # for the empirical pattern across datasets and models.
+    head_mode = 'both'
+
     @property
     @abstractmethod
     def embedding_type(self):
@@ -89,6 +99,17 @@ class Predictor(ABC):
 
         has_k = host_k is not None and not is_null(host_k)
         has_o = host_o is not None and not is_null(host_o)
+
+        # head_mode further gates which head participates. 'k_only' disables
+        # the O branch entirely; 'o_only' disables K.
+        if self.head_mode == 'k_only':
+            has_o = False
+        elif self.head_mode == 'o_only':
+            has_k = False
+        elif self.head_mode != 'both':
+            raise ValueError(
+                f'Unknown head_mode: {self.head_mode!r}. '
+                f'Use "both", "k_only", or "o_only".')
 
         if not has_k and not has_o:
             return None
