@@ -14,6 +14,23 @@ import argparse
 import importlib.util
 import os
 import sys
+from pathlib import Path
+
+
+# Make the `cipher` package importable when run from a checkout without
+# `pip install -e .` (e.g. HPC login nodes). Walks up from this file
+# until it finds `src/cipher/`, then prepends `src/` to sys.path.
+def _ensure_cipher_on_path():
+    here = Path(__file__).resolve().parent
+    for parent in [here, *here.parents]:
+        candidate = parent / 'src' / 'cipher'
+        if candidate.is_dir():
+            src = str(parent / 'src')
+            if src not in sys.path:
+                sys.path.insert(0, src)
+            return
+
+_ensure_cipher_on_path()
 
 from cipher.data.embeddings import load_embeddings
 from cipher.data.proteins import load_fasta_md5

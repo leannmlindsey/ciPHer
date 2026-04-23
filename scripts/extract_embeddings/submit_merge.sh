@@ -34,6 +34,15 @@ if [ "$COMPRESS" = "0" ]; then
     NO_COMPRESS_FLAG="--no-compress"
 fi
 
+# DELETE_INPUTS=1 unlinks each split NPZ after its data is committed to
+# the output. Use when disk is tight. Output is committed per-split so a
+# crash leaves a valid partial NPZ with everything processed so far.
+DELETE_INPUTS="${DELETE_INPUTS:-0}"
+DELETE_FLAG=""
+if [ "$DELETE_INPUTS" = "1" ]; then
+    DELETE_FLAG="--delete-inputs"
+fi
+
 GPUS=1
 CPUS=4
 MEM="16G"
@@ -87,6 +96,7 @@ fi
 
 python ${CIPHER_DIR}/scripts/extract_embeddings/merge_split_embeddings.py \\
     ${NO_COMPRESS_FLAG} \\
+    ${DELETE_FLAG} \\
     -i ${INPUT} \\
     -o ${OUTPUT}
 
