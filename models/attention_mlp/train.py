@@ -385,26 +385,39 @@ def train(experiment_dir, config):
         y = labels[idxs]
         return X, y
 
+    # heads: 'both' (default), 'k' = K only, 'o' = O only.
+    heads = str(train_cfg.get('heads', 'both')).lower()
+    if heads not in ('both', 'k', 'o'):
+        raise ValueError(f"training.heads must be one of {{'both','k','o'}}, got {heads!r}")
+    train_k = heads in ('both', 'k')
+    train_o = heads in ('both', 'o')
+
     # Step 5: Train K head
     print('\nStep 4: Training...')
-    set_seed(seed)
+    if train_k:
+        set_seed(seed)
 
-    X_train_k, y_train_k = build_arrays(splits_k['train'], td.k_labels)
-    X_val_k, y_val_k = build_arrays(splits_k['val'], td.k_labels)
-    X_test_k, y_test_k = build_arrays(splits_k['test'], td.k_labels)
+        X_train_k, y_train_k = build_arrays(splits_k['train'], td.k_labels)
+        X_val_k, y_val_k = build_arrays(splits_k['val'], td.k_labels)
+        X_test_k, y_test_k = build_arrays(splits_k['test'], td.k_labels)
 
-    train_head('k', X_train_k, y_train_k, X_val_k, y_val_k, X_test_k, y_test_k,
-               td.k_classes, config, os.path.join(experiment_dir, 'model_k'))
+        train_head('k', X_train_k, y_train_k, X_val_k, y_val_k, X_test_k, y_test_k,
+                   td.k_classes, config, os.path.join(experiment_dir, 'model_k'))
+    else:
+        print(f'  Skipping K head training (heads={heads!r})')
 
     # Step 6: Train O head
-    set_seed(seed)
+    if train_o:
+        set_seed(seed)
 
-    X_train_o, y_train_o = build_arrays(splits_o['train'], td.o_labels)
-    X_val_o, y_val_o = build_arrays(splits_o['val'], td.o_labels)
-    X_test_o, y_test_o = build_arrays(splits_o['test'], td.o_labels)
+        X_train_o, y_train_o = build_arrays(splits_o['train'], td.o_labels)
+        X_val_o, y_val_o = build_arrays(splits_o['val'], td.o_labels)
+        X_test_o, y_test_o = build_arrays(splits_o['test'], td.o_labels)
 
-    train_head('o', X_train_o, y_train_o, X_val_o, y_val_o, X_test_o, y_test_o,
-               td.o_classes, config, os.path.join(experiment_dir, 'model_o'))
+        train_head('o', X_train_o, y_train_o, X_val_o, y_val_o, X_test_o, y_test_o,
+                   td.o_classes, config, os.path.join(experiment_dir, 'model_o'))
+    else:
+        print(f'  Skipping O head training (heads={heads!r})')
 
     # Save experiment metadata
     from cipher.provenance import capture_provenance

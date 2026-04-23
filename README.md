@@ -382,14 +382,15 @@ Target thresholds: top-1 K-match rate above 20% (the raw ESM-2 baseline is
 
 ## Training conventions (shared across models)
 
-### Training-set filter: `--tools` vs `--positive_list`
+### Training-set filter: `--tools` vs `--positive_list` vs per-head lists
 
-Two mutually exclusive ways to decide which candidate proteins enter training:
+Three mutually exclusive ways to decide which candidate proteins enter training:
 
 | Filter | Flag | Notes |
 |---|---|---|
 | Tool flags | `--tools DepoScope,PhageRBPdetect` | Keep proteins flagged by **any** listed tool |
-| Pipeline-positive list | `--positive_list data/training_data/metadata/pipeline_positive.list` | Intersect candidates with this file only; ignore tool flags |
+| Pipeline-positive list (single, legacy) | `--positive_list data/training_data/metadata/pipeline_positive.list` | Intersect candidates with this file only; ignore tool flags. Both heads use the same list. |
+| Per-head lists (v2) | `--positive_list_k <K_list>` + `--positive_list_o <O_list>` | Independent K and O lists — training pool is the UNION, each sample contributes only to the head-loss for the list it appears in (label-level masking). |
 
 ```bash
 # Use the positive list (broader — includes PhageRBPdetect-only adhesins
@@ -397,10 +398,35 @@ Two mutually exclusive ways to decide which candidate proteins enter training:
 cipher-train --model attention_mlp \
     --positive_list data/training_data/metadata/pipeline_positive.list \
     --label_strategy multi_label_threshold --min_class_samples 25
+
+# v2 per-head training (cleaner labels per axis; unlocks agent 4's
+# highconf_v2/ deliverables). Each protein's K labels are zeroed if
+# it's not in the K list, and same for O — so each head trains only
+# on proteins that are clean for that axis.
+cipher-train --model attention_mlp \
+    --positive_list_k data/training_data/metadata/highconf_v2/HC_K_cl95.list \
+    --positive_list_o data/training_data/metadata/highconf_v2/HC_O_cl95_full_coverage.list \
+    --label_strategy multi_label_threshold --min_class_samples 25
 ```
 
 Valid tool names: `DePP_85`, `PhageRBPdetect`, `DepoScope`, `DepoRanker`,
 `SpikeHunter`, `dbCAN`, `IPR`, `phold_glycan_tailspike`.
+
+### Which head(s) to train: `--heads`
+
+`--heads {both,k,o}` controls whether both heads, just K, or just O are
+trained. Orthogonal to the positive-list flags — for example, you can
+train just the K head against the K list as an ablation:
+
+```bash
+cipher-train --model attention_mlp \
+    --positive_list_k data/training_data/metadata/highconf_v2/HC_K_cl95.list \
+    --heads k
+```
+
+For `attention_mlp`, the unused head's training loop is skipped
+entirely (no `model_k/` or `model_o/` subdirectory is written). For
+`contrastive_encoder`, the unused head's ArcFace weight is forced to 0.
 
 ### Cluster-stratified downsampling (`--cluster_file`)
 
@@ -760,9 +786,14 @@ under `$TORCH_HOME`.
 
 | File | Purpose |
 |---|---|
-| `esm2_extract.py` | Extracts embeddings from any ESM-2 model. Supports `--pooling mean`, `--pooling segmentsN` for any `N ≥ 2`, and `--pooling full` (per-residue output for Light Attention). |
-| `prott5_extract.py` | Extracts embeddings from any Rostlab ProtT5 variant (XL, XL-BFD, XXL). Supports `--pooling mean` and `--pooling segmentsN`, `--half_precision` for reduced VRAM, and `--max_length` for long-sequence truncation. Writes checkpoints every 2000 proteins and resumes automatically on restart. |
+| `esm2_extract.py` | Extracts embeddings from any ESM-2 model. Supports `--pooling mean`, `--pooling segmentsN` for any `N ≥ 2`, and `--pooling full` (per-residue output for Light Attention). Writes a `<output>.partial.npz` checkpoint every `--checkpoint_every` proteins (default 2000) and resumes automatically on restart. |
+| `prott5_extract.py` | Extracts embeddings from any Rostlab ProtT5 variant (XL, XL-BFD, XXL). Supports `--pooling mean`, `--pooling full`, and `--pooling segmentsN`, `--half_precision` for reduced VRAM, and `--max_length` for long-sequence truncation. Same checkpoint/resume behaviour as `esm2_extract.py`. |
+| `filter_fasta.py` | One-shot filter: given a FASTA and a list of protein IDs, write out only the matching sequences. Used to narrow an extraction run to a positive list (e.g. `pipeline_positive.list`). |
+| `split_fasta_by_length.py` | Bins a FASTA into cumulative length caps (128 / 256 / 512 / 1024 / 2048 / 4096, plus an 8192 overflow). Writes sequences within each bin in length-ascending order so per-batch padding inside a bin is small. |
 | `submit_extractions.sh` | SLURM fan-out: submits one training-FASTA job and one validation-FASTA job per `(model, pooling)` entry in the `EXTRACTIONS` array. Selects the appropriate conda environment per family (`esmfold2` for ESM-2, `prott5` for ProtT5). |
+| `submit_prott5_full_binned.sh` | End-to-end length-binned ProtT5-XL extraction pipeline: filter FASTA → split by length → submit one SLURM job per bin. Idempotent; skips bins whose NPZ already exists. |
+| `resubmit_missing_bins.sh` | ESM-2 counterpart: given an already-split directory, submits only the length bins whose output NPZ is missing. Use to recover from partial failures without re-running completed bins. |
+| `merge_split_embeddings.py` | Stream-merges many per-bin NPZs into a single NPZ (see "Merging" below). O(largest single array) memory. |
 
 #### Invocation
 
@@ -814,13 +845,103 @@ python scripts/extract_embeddings/prott5_extract.py \
 
 #### Crash resilience
 
-`prott5_extract.py` writes a partial checkpoint (`<output>.partial.npz`)
-after every 2000 proteins and resumes automatically when restarted with
-the same output path, so a late-stage failure forfeits at most 2000
-proteins of computation. An out-of-memory error on a single long
-sequence is caught, the sequence is skipped, and the total count of
-skipped sequences is reported at the end of the run via the
-`oom_skipped` field in the log.
+Both `esm2_extract.py` and `prott5_extract.py` write a partial checkpoint
+(`<output>.partial.npz`) every `--checkpoint_every` proteins (default 2000)
+and resume automatically when restarted with the same output path, so a
+late-stage failure forfeits at most ~2000 proteins of computation.
+`prott5_extract.py` additionally catches an out-of-memory error on a
+single long sequence, skips it, and reports the total `oom_skipped`
+count at the end of the run.
+
+#### Length-binned full per-residue extraction
+
+For `--pooling full` (per-residue output, for Light Attention), memory
+and time scale with L². Running one big extraction over the whole FASTA
+fails for two reasons:
+
+1. Inference-time VRAM on long sequences (ProtT5-XL attention is O(L²)).
+2. Output size: the in-memory `{md5 -> (L, D) array}` dict before the
+   final `np.savez_compressed` call is often >100 GB for our datasets,
+   and the per-sequence SLURM job can't hold it.
+
+The fix is to split the input FASTA into length bins (128 / 256 / 512 /
+1024 / 2048 / 4096, plus 8192 overflow), extract each bin in its own
+SLURM job with memory scaled to the bin, and merge the resulting NPZs at
+the end. The per-bin jobs also stay within Delta-AI's 48-hour wall
+limit for the larger bins.
+
+**Running the pipeline end-to-end (ProtT5-XL, pipeline_positive subset):**
+
+```bash
+# One command filters candidates.faa to the positive list, splits by
+# length, and submits one SLURM job per bin. Idempotent — rerun to
+# resubmit only missing bins.
+bash scripts/extract_embeddings/submit_prott5_full_binned.sh
+
+# Preview without submitting:
+DRY_RUN=1 bash scripts/extract_embeddings/submit_prott5_full_binned.sh
+```
+
+**ESM-2 counterpart (run after an earlier extraction left some bins missing):**
+
+```bash
+# Assumes split_fasta/ + (partially) split_embeddings/ under ROOT.
+# Resubmits only bins whose NPZ is missing. maxlen1024 runs full-node
+# (mem=0, 4 GPUs) because its in-memory output exceeds any per-job mem.
+ROOT=/work/hdd/bfzj/llindsey1/embeddings_full \
+    bash scripts/extract_embeddings/resubmit_missing_bins.sh
+```
+
+Per-bin outputs land under `<root>/split_embeddings/`, one NPZ per
+length bin.
+
+#### Merging split outputs
+
+Once every bin's NPZ is on disk, merge them into a single drop-in NPZ
+consumable by `np.load(...)`:
+
+```bash
+python scripts/extract_embeddings/merge_split_embeddings.py \
+    -i /work/hdd/bfzj/llindsey1/prott5_xl_full/split_embeddings \
+    -o /work/hdd/bfzj/llindsey1/prott5_xl_full/candidates_prott5_xl_full_md5.npz
+```
+
+The merge is **streaming**: each array is read from its source NPZ and
+written directly as an `.npy` member inside the output zip, one at a
+time. Peak memory is O(largest single array), not O(total merged data) —
+this matters for the ESM-2 650M full merge where the naive in-memory
+approach would need ~250 GB of RAM. The output format is a standard
+NPZ; downstream code continues to use `np.load(...)` unchanged.
+
+Pass `--no-compress` for a faster-to-write, larger-on-disk output (the
+`savez` vs `savez_compressed` trade-off). Duplicate keys are kept once
+(first-write wins) with a count logged at the end. Mixed last-dim
+embeddings trigger a warning but don't abort.
+
+#### Verifying coverage + sanity
+
+Before passing a merged per-residue NPZ to a downstream model:
+
+```bash
+# Coverage against the canonical positive-ID lists + dim/NaN sanity on
+# a random sample. --expected-dim asserts shape[-1] matches on every
+# sampled key (exit 1 on mismatch or NaN/Inf).
+python scripts/utils/check_full_npz_coverage.py \
+    --npz /work/hdd/bfzj/llindsey1/prott5_xl_full/candidates_prott5_xl_full_md5.npz \
+    --expected-dim 1024
+```
+
+The coverage section prints, for `candidates.faa`, `pipeline_positive.list`,
+`highconf_tsp_K.list`, and `highconf_pipeline_positive_K.list`, the
+number of MD5s present in the NPZ vs missing. For an extraction that
+was filtered to `pipeline_positive` upstream, expect ~100% coverage on
+the pipeline + highconf rows and partial coverage on the "all
+candidates" row.
+
+The sanity section samples `--sample-size` keys (default 200) and
+reports: unique last-dims observed, L (first-dim) range + median, and
+any NaN/Inf. Use `--expected-dim 1024` for ProtT5-XL, `--expected-dim
+1280` for ESM-2 650M.
 
 ---
 

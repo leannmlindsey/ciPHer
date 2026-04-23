@@ -125,6 +125,9 @@ class PKClusterSampler(Sampler[List[int]]):
         self._class_cluster_to_idx = {k: list(v) for k, v in class_cluster_to_idx.items()}
         self._class_to_clusters = {c: list(v) for c, v in class_to_clusters.items()}
         self._usable_classes = list(usable)
+        # Optional per-class sampling probability for hard-negative mining.
+        # None = uniform sampling of P classes (default behaviour).
+        self._class_probs: dict | None = None
 
         if num_batches_per_epoch is None:
             total_usable = sum(len(self._class_to_indices[c]) for c in usable)
@@ -135,6 +138,44 @@ class PKClusterSampler(Sampler[List[int]]):
 
     def set_epoch(self, epoch: int) -> None:
         self._epoch = int(epoch)
+
+    def set_class_weights(self, weights: dict | None,
+                          temperature: float = 1.0,
+                          epsilon: float = 0.01) -> None:
+        """Bias which P classes get picked per batch (hard-negative mining).
+
+        Pass a dict `class -> hardness_score`; higher score = more confused =
+        more likely to be sampled. Non-listed classes fall back to the
+        minimum score. Scores are min-max normalised, softmax-converted with
+        the given temperature, then floored at `epsilon/N` so every usable
+        class remains sampleable (required for `replace=False` with P <= N).
+
+        Pass `None` to revert to uniform class sampling.
+        """
+        if weights is None:
+            self._class_probs = None
+            return
+
+        usable = self._usable_classes
+        min_score = min(weights.values()) if weights else 0.0
+        scores = np.array([float(weights.get(c, min_score)) for c in usable],
+                          dtype=np.float64)
+        span = scores.max() - scores.min()
+        if span > 0:
+            scores = (scores - scores.min()) / span
+        else:
+            scores = np.zeros_like(scores)
+        if temperature <= 0:
+            raise ValueError('temperature must be positive')
+        logits = scores / temperature
+        logits -= logits.max()  # for numerical stability
+        probs = np.exp(logits)
+        probs = probs / probs.sum()
+        n = len(probs)
+        probs = (1.0 - epsilon) * probs + epsilon / n
+        probs = probs / probs.sum()
+
+        self._class_probs = {c: float(p) for c, p in zip(usable, probs)}
 
     def __len__(self) -> int:
         return self.num_batches_per_epoch
@@ -148,8 +189,17 @@ class PKClusterSampler(Sampler[List[int]]):
     # ---- internals ----
 
     def _sample_one_batch(self, rng: np.random.Generator) -> List[int]:
-        chosen_classes = rng.choice(
-            self._usable_classes, size=self.P, replace=False)
+        if self._class_probs is not None:
+            classes = list(self._class_probs.keys())
+            probs = np.array([self._class_probs[c] for c in classes])
+            probs = probs / probs.sum()
+            # np.random.Generator.choice can't take a non-array-of-ints, so
+            # sample indices then map back.
+            idx = rng.choice(len(classes), size=self.P, replace=False, p=probs)
+            chosen_classes = [classes[i] for i in idx]
+        else:
+            chosen_classes = rng.choice(
+                self._usable_classes, size=self.P, replace=False)
 
         batch: List[int] = []
         for c in chosen_classes:

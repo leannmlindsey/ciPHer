@@ -13,7 +13,7 @@ import json
 import os
 import sys
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 
 import numpy as np
 import torch
@@ -269,6 +269,18 @@ def train(experiment_dir, config):
 
     lambda_k = float(train_cfg.get('lambda_k', 1.0))
     lambda_o = float(train_cfg.get('lambda_o', 1.0))
+    # `heads` is orthogonal to lambda_{k,o} — it's a coarser kill-switch
+    # exposed via CLI. When set, it overrides lambda to 0 for the dropped
+    # head regardless of whether the user also specified a lambda.
+    heads = str(train_cfg.get('heads', 'both')).lower()
+    if heads not in ('both', 'k', 'o'):
+        raise ValueError(f"training.heads must be one of {{'both','k','o'}}, got {heads!r}")
+    if heads == 'k':
+        lambda_o = 0.0
+        print('  heads=k: forcing lambda_o=0')
+    elif heads == 'o':
+        lambda_k = 0.0
+        print('  heads=o: forcing lambda_k=0')
     lr = float(train_cfg.get('learning_rate', 1e-4))
     wd = float(train_cfg.get('weight_decay', 1e-4))
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
@@ -276,6 +288,14 @@ def train(experiment_dir, config):
     # ---- Step 7: training loop ----
     epochs = int(train_cfg.get('epochs', 100))
     patience = int(train_cfg.get('patience', 20))
+    hard_neg_on = bool(samp_cfg.get('hard_negative_mining', False))
+    hard_neg_start = int(samp_cfg.get('hard_negative_start_epoch', 10))
+    hard_neg_every = max(1, int(samp_cfg.get('hard_negative_update_every', 5)))
+    hard_neg_temp = float(samp_cfg.get('hard_negative_temperature', 1.0))
+    if hard_neg_on:
+        print(f'  hard-negative mining: enabled  '
+              f'(start_epoch={hard_neg_start}, update_every={hard_neg_every}, '
+              f'temperature={hard_neg_temp})')
     history = []
     best_gap = -1.0
     best_epoch = 0
@@ -334,6 +354,33 @@ def train(experiment_dir, config):
             if since_best >= patience:
                 print(f'  early stopping at epoch {epoch} (best gap={best_gap:+.4f} @ epoch {best_epoch})')
                 break
+
+        # Hard-negative mining: every N epochs after warm-up, re-weight the
+        # PK sampler so P classes are drawn proportional to their
+        # current-encoder confusability (max cosine to another prototype).
+        if (hard_neg_on and epoch >= hard_neg_start
+                and (epoch - hard_neg_start) % hard_neg_every == 0):
+            with torch.no_grad():
+                z_train_np = model.encoder(X_train.to(device)).cpu().numpy()
+            labels_np = k_train.numpy()
+            by_class = defaultdict(list)
+            for i, c in enumerate(labels_np):
+                if c >= 0:
+                    by_class[int(c)].append(i)
+            if len(by_class) >= 2:
+                z_norm = z_train_np / (np.linalg.norm(z_train_np, axis=1, keepdims=True) + 1e-8)
+                classes = list(by_class.keys())
+                protos = np.stack([z_norm[ix].mean(axis=0) for ix in (by_class[c] for c in classes)])
+                protos = protos / (np.linalg.norm(protos, axis=1, keepdims=True) + 1e-8)
+                sim = protos @ protos.T
+                np.fill_diagonal(sim, -np.inf)
+                hardness = sim.max(axis=1)
+                weights = {int(c): float(h) for c, h in zip(classes, hardness)}
+                sampler.set_class_weights(weights, temperature=hard_neg_temp)
+                n_over = int((hardness > np.median(hardness)).sum())
+                print(f'    [hard-neg] re-weighted {len(weights)} classes '
+                      f'(hardness median={np.median(hardness):+.3f}, '
+                      f'top-half count={n_over})')
 
     # Restore best weights
     if best_state is not None:
