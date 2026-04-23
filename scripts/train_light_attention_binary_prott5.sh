@@ -54,7 +54,7 @@ VAL_DATASETS_DIR="${VAL_DATASETS_DIR:-${DATA_DIR}/validation_data/HOST_RANGE}"
 # /work/hdd/bfzj/llindsey1/ rather than the embeddings/ subtree used by
 # other families). ~137 GB NPZ; ghx4 with --mem=0 has the RAM to load it.
 TRAIN_EMB="${TRAIN_EMB:-/work/hdd/bfzj/llindsey1/prott5_xl_full/candidates_prott5_xl_full_md5.npz}"
-VAL_EMB="${VAL_EMB:-/work/hdd/bfzj/llindsey1/validation_prott5_xl_full/validation_prott5_xl_full_md5.npz}"
+VAL_EMB="${VAL_EMB:-/work/hdd/bfzj/llindsey1/val_prott5_xl_full/validation_prott5_full_md5.npz}"
 EMBEDDING_TYPE="${EMBEDDING_TYPE:-prott5_xl_full}"
 
 # Training-set filter: highconf_pipeline_positive_K (12,481 proteins).
