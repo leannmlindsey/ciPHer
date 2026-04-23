@@ -79,6 +79,22 @@ def apply_overrides(config, args):
         config['experiment'].pop('tools', None)
         config['experiment'].pop('exclude_tools', None)
         config['experiment'].pop('protein_set', None)
+        # Also clear per-head lists from base config — single-list mode wins.
+        config['experiment'].pop('positive_list_k_path', None)
+        config['experiment'].pop('positive_list_o_path', None)
+    if args.positive_list_k is not None or args.positive_list_o is not None:
+        # Per-head v2 mode. Clear the legacy single-list + tool filters.
+        exp = config.setdefault('experiment', {})
+        if args.positive_list_k is not None:
+            exp['positive_list_k_path'] = args.positive_list_k
+        if args.positive_list_o is not None:
+            exp['positive_list_o_path'] = args.positive_list_o
+        exp.pop('positive_list_path', None)
+        exp.pop('tools', None)
+        exp.pop('exclude_tools', None)
+        exp.pop('protein_set', None)
+    if args.heads is not None:
+        config.setdefault('training', {})['heads'] = args.heads
     if args.min_sources is not None:
         config.setdefault('experiment', {})['min_sources'] = args.min_sources
     if args.max_k_types is not None:
@@ -388,6 +404,25 @@ Examples:
     parser.add_argument('--protein_set',
                         help='DEPRECATED: use --tools/--exclude_tools. '
                              'Values: all_glycan_binders, tsp_only, rbp_only')
+    parser.add_argument('--positive_list_k',
+                        help='v2 per-head: positive list for the K head. '
+                             'When combined with --positive_list_o, training '
+                             'samples are the UNION of both lists; each '
+                             'sample contributes only to the head-loss for '
+                             'the list it appears in (label-level masking). '
+                             'Mutex with --positive_list, --tools, '
+                             '--exclude_tools, --protein_set.')
+    parser.add_argument('--positive_list_o',
+                        help='v2 per-head: positive list for the O head. '
+                             'See --positive_list_k.')
+    parser.add_argument('--heads', choices=('both', 'k', 'o'),
+                        default=None,
+                        help='Which head(s) to train: both (default), k, or o. '
+                             'attention_mlp skips the other head\'s training '
+                             'loop; contrastive_encoder forces the other '
+                             'lambda to 0. Orthogonal to the positive-list '
+                             'flags — you can set per-head lists and still '
+                             'train only one head.')
     parser.add_argument('--positive_list',
                         help='Path to a positive-list file (one protein ID per line). '
                              'Filters candidates to these IDs only. Mutually '
@@ -510,6 +545,15 @@ Examples:
         parser.error(
             '--positive_list is mutually exclusive with --tools, '
             '--exclude_tools, and --protein_set.')
+    if args.positive_list and (args.positive_list_k or args.positive_list_o):
+        parser.error(
+            '--positive_list is mutually exclusive with '
+            '--positive_list_k / --positive_list_o. Use one mode or the other.')
+    if (args.positive_list_k or args.positive_list_o) and (
+            args.tools or args.exclude_tools or args.protein_set):
+        parser.error(
+            '--positive_list_k / --positive_list_o are mutually exclusive '
+            'with --tools, --exclude_tools, and --protein_set.')
 
     project_root = find_project_root()
 

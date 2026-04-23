@@ -382,14 +382,15 @@ Target thresholds: top-1 K-match rate above 20% (the raw ESM-2 baseline is
 
 ## Training conventions (shared across models)
 
-### Training-set filter: `--tools` vs `--positive_list`
+### Training-set filter: `--tools` vs `--positive_list` vs per-head lists
 
-Two mutually exclusive ways to decide which candidate proteins enter training:
+Three mutually exclusive ways to decide which candidate proteins enter training:
 
 | Filter | Flag | Notes |
 |---|---|---|
 | Tool flags | `--tools DepoScope,PhageRBPdetect` | Keep proteins flagged by **any** listed tool |
-| Pipeline-positive list | `--positive_list data/training_data/metadata/pipeline_positive.list` | Intersect candidates with this file only; ignore tool flags |
+| Pipeline-positive list (single, legacy) | `--positive_list data/training_data/metadata/pipeline_positive.list` | Intersect candidates with this file only; ignore tool flags. Both heads use the same list. |
+| Per-head lists (v2) | `--positive_list_k <K_list>` + `--positive_list_o <O_list>` | Independent K and O lists — training pool is the UNION, each sample contributes only to the head-loss for the list it appears in (label-level masking). |
 
 ```bash
 # Use the positive list (broader — includes PhageRBPdetect-only adhesins
@@ -397,10 +398,35 @@ Two mutually exclusive ways to decide which candidate proteins enter training:
 cipher-train --model attention_mlp \
     --positive_list data/training_data/metadata/pipeline_positive.list \
     --label_strategy multi_label_threshold --min_class_samples 25
+
+# v2 per-head training (cleaner labels per axis; unlocks agent 4's
+# highconf_v2/ deliverables). Each protein's K labels are zeroed if
+# it's not in the K list, and same for O — so each head trains only
+# on proteins that are clean for that axis.
+cipher-train --model attention_mlp \
+    --positive_list_k data/training_data/metadata/highconf_v2/HC_K_cl95.list \
+    --positive_list_o data/training_data/metadata/highconf_v2/HC_O_cl95_full_coverage.list \
+    --label_strategy multi_label_threshold --min_class_samples 25
 ```
 
 Valid tool names: `DePP_85`, `PhageRBPdetect`, `DepoScope`, `DepoRanker`,
 `SpikeHunter`, `dbCAN`, `IPR`, `phold_glycan_tailspike`.
+
+### Which head(s) to train: `--heads`
+
+`--heads {both,k,o}` controls whether both heads, just K, or just O are
+trained. Orthogonal to the positive-list flags — for example, you can
+train just the K head against the K list as an ablation:
+
+```bash
+cipher-train --model attention_mlp \
+    --positive_list_k data/training_data/metadata/highconf_v2/HC_K_cl95.list \
+    --heads k
+```
+
+For `attention_mlp`, the unused head's training loop is skipped
+entirely (no `model_k/` or `model_o/` subdirectory is written). For
+`contrastive_encoder`, the unused head's ArcFace weight is forced to 0.
 
 ### Cluster-stratified downsampling (`--cluster_file`)
 

@@ -269,6 +269,18 @@ def train(experiment_dir, config):
 
     lambda_k = float(train_cfg.get('lambda_k', 1.0))
     lambda_o = float(train_cfg.get('lambda_o', 1.0))
+    # `heads` is orthogonal to lambda_{k,o} — it's a coarser kill-switch
+    # exposed via CLI. When set, it overrides lambda to 0 for the dropped
+    # head regardless of whether the user also specified a lambda.
+    heads = str(train_cfg.get('heads', 'both')).lower()
+    if heads not in ('both', 'k', 'o'):
+        raise ValueError(f"training.heads must be one of {{'both','k','o'}}, got {heads!r}")
+    if heads == 'k':
+        lambda_o = 0.0
+        print('  heads=k: forcing lambda_o=0')
+    elif heads == 'o':
+        lambda_k = 0.0
+        print('  heads=o: forcing lambda_k=0')
     lr = float(train_cfg.get('learning_rate', 1e-4))
     wd = float(train_cfg.get('weight_decay', 1e-4))
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
