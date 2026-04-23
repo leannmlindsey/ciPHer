@@ -50,11 +50,13 @@ LABEL_STRATEGY="multi_label_threshold"
 MIN_CLASS_SAMPLES=25
 MIN_SOURCES=1
 
-# SLURM resources
+# SLURM resources — v2 is ~2× v1 scale (15k K-train + 10k O-train
+# vs v1's 6k/6k). v1's 64G was on the edge; for v2 we ran OOM on the
+# O head after K training completed, so bump mem + time to be safe.
 GPUS=1
 CPUS=8
-MEM="64G"
-TIME="12:00:00"
+MEM="128G"
+TIME="24:00:00"
 
 # ============================================================
 # Variant table:
