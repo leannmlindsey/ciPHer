@@ -314,6 +314,95 @@ Four blocks control different aspects of the run:
 - UCSD phages infect 15-25 K-types each
 - Single-label models are structurally unable to handle these
 
+### 4a. PHL ceiling is a representation-granularity problem, not coverage (2026-04-22)
+Three cross-validating findings converge on the same mechanism:
+- **ESM-2 mean space does not distribution-shift PHL.** 90.6% of PHL
+  proteins have a training protein at cosine ≥ 0.99; every PHL protein
+  has a near-identical ESM-2 neighbour.
+- **Those near-identical neighbours carry the wrong K-type.** Top-1
+  nearest neighbour shares a K-type only ~11% of the time (89% wrong);
+  52% of PHL proteins have no K-matching neighbour even in the top-50.
+- **In raw sequence space, PHL is sequence-distant from training.**
+  MMseqs2 finds only 17% of PHL proteins at ≥ 90% identity to any
+  training TSP; a sequence-level 1-NN classifier on MMseqs pct-identity
+  gets 12.6% match on PHL — essentially the rh@1 our trained models
+  achieve.
+
+Implication: scaling ESM-2 will not close the gap (same-family embedding
+compresses K-types the same way). ProtT5's 8× larger K-type cosine gap
+is load-bearing. Next-level improvements come from either (a) a
+K-separating representation (contrastive fine-tuning, structure-based),
+or (b) architecture that preserves local binding-domain signal.
+Provenance: `analyses/02_phl_cluster_mapping/` in
+`CLAUDE_PHI_DATA_ANALYSIS`; `scripts/analysis/phl_training_distance.py`
+and `phl_neighbor_labels.py`.
+
+### 4b. K and O heads carry largely independent signal on PHL (A7, 2026-04-22)
+Per-pair head attribution on the current best `attention_mlp + ProtT5
+mean + highconf_pipeline` run (PHL rh@1 = 0.188):
+
+- K-only rh@1 = 0.130
+- O-only rh@1 = 0.164
+- Combined rh@1 = 0.188
+- Only 10 of 61 combined-rh@1 wins had both heads agree; 34 came from
+  the K head, 27 from the O head.
+
+Both heads contribute, and they do not substantially redundantly
+overlap. Dropping either costs 30–40% of current performance.
+Implication: the earlier "O head is noise, drop it for a K-only
+contrastive run" hypothesis is falsified. The right move is to train
+each head on its own clean labels (see §4c).
+
+Provenance: `CLAUDE_PHI_DATA_ANALYSIS/analyses/07_head_attribution/`.
+
+### 4c. Per-head training via v2 highconf lists (2026-04-22)
+The old `highconf_pipeline_positive_K.list` (12,481 proteins, filtered
+on K-cluster purity only) forces a single list on both head losses.
+A K-clean / O-noisy protein injects O-noise into O-head training; a
+K-noisy / O-clean protein is excluded entirely — wasteful.
+
+The v2 dataset ships two independent streams per axis, in two
+variants (strict cl95 and UAT maximal):
+
+| File | Proteins | Serotypes |
+|---|---:|---:|
+| `data/training_data/metadata/highconf_v2/HC_K_cl95.list` | 23,299 | 161 / 161 K-types |
+| `data/training_data/metadata/highconf_v2/HC_K_UAT.list` | 25,924 | 161 / 161 K-types |
+| `data/training_data/metadata/highconf_v2/HC_O_cl95_full_coverage.list` | 14,677 | 22 / 22 O-types |
+| `data/training_data/metadata/highconf_v2/HC_O_UAT.list` | 15,568 | 22 / 22 O-types |
+
+Train two recipes and A/B: **strict** (`HC_K_cl95.list` +
+`HC_O_cl95_full_coverage.list`) or **UAT maximal**
+(`HC_K_UAT.list` + `HC_O_UAT.list`).
+
+**Blocker:** the training pipeline currently takes one positive list
+and applies it to both head losses. Each protein must be masked out of
+the head it is not clean for — a loss-masking change, not an
+architecture change. Conceptually:
+
+```python
+k_mask = protein_id in HC_K_list
+o_mask = protein_id in HC_O_list
+loss = (k_mask * k_loss(k_logits, k_labels)).mean() \
+     + (o_mask * o_loss(o_logits, o_labels)).mean()
+```
+
+Full rationale in `notes/handoff_all_models_from_agent4.md` and
+`notes/handoff_agent1_from_agent4.md`. Filter recipe in
+`CLAUDE_PHI_DATA_ANALYSIS/analyses/13_optimal_highconf/`.
+
+### 4d. Highconf v1 imposes a structural HR@1 ceiling on some datasets (2026-04-22)
+The v1 `highconf_pipeline_positive_K.list` filter drops ~60% of
+K-classes (from ~161 → 64) and ~36% of O-classes (22 → 14) from the
+training label space. Validation pairs whose true K-type is not in the
+surviving class set are guaranteed misses at HR@1 regardless of
+architecture. Empirically, **GORODNICHIV has zero scorable pairs** under
+v1 — 100% of its validation pairs have out-of-set K-types. Agent 2's
+light-attention sweep confirms this across six combinations.
+
+This is one reason the v2 per-head lists (§4c) widen coverage back to
+**161 / 161 K-types** and **22 / 22 O-types**.
+
 ### 5. Best models so far (rank-hosts HR@1 per validation dataset)
 
 The following table summarizes the best-performing runs under the ciPHer
@@ -350,6 +439,7 @@ the cross-dataset spread for each model.
 | `sweep_posList_kmer_li10_k5_cl70` | positive_list, cluster-70 | 0.275 | 1.000 | 0.100 | 0.581 | 0.160 | 0.296 | 0.416 | 0.372 | 0.628 | 0.411 |
 | `concat_prott5_mean+kmer_li10_k5` | tools, random | 0.275 | 1.000 | 0.096 | 0.737 | **0.169** | 0.358 | 0.511 | 0.394 | 0.632 | 0.386 |
 | `concat_posList_esm2_3b_mean+kmer_li10_k5_cl70` | positive_list, cluster-70 | 0.275 | 1.000 | 0.081 | 0.647 | 0.163 | 0.359 | 0.453 | 0.384 | 0.603 | 0.397 |
+| `highconf_pipeline_K_prott5_mean` (2026-04-22, **current best PHL**) | highconf v1 (pipeline_positive_K, 9,774 MD5s, 63 K-classes) | 0.188 | 0.000 (n=0) | 0.019 | 0.740 | **0.188** | 0.286 | 0.399 | 0.296 | — | — |
 
 CHEN and GORODNICHIV HR@1 are saturated for the majority of runs (CHEN
 contains three phages; GORODNICHIV contains three phages and a single
@@ -378,6 +468,14 @@ between models.
   list and switching random downsampling to cluster-stratified sampling
   at 70% identity consistently lifts PhageHostLearn HR@1 by 30–45%
   relative to the baseline without degrading overall performance.
+- **Highconf v1 + ProtT5 mean + attention_mlp** (bottom row) broke the
+  0.17 PhageHostLearn ceiling for the first time at rh@1 = 0.188, but
+  the v1 filter drops GORODNICHIV entirely (see §4d) and constrains
+  the K-class label space to 64 of ~161 classes. Per §4b, K-only and
+  O-only both contribute to this number; dropping either head would
+  cost 30–40%. The v2 per-head lists (§4c) are the successor design
+  intended to widen coverage back to all classes while preserving the
+  per-axis purity that gave v1 its lift.
 
 ## Existing Code Reference
 
@@ -644,3 +742,66 @@ be coordinated across branches before editing:
 Changes to any of these should be minimal, backward-compatible (per the
 rules above), and ideally batched into a single PR rather than spread
 across several model branches.
+
+### Cross-agent communication via `notes/`
+
+Since agents work in separate worktrees / repos, the `notes/` directory
+on `main` is the shared surface for durable, structured hand-offs.
+It is tracked in git and reviewed with the same care as documentation.
+
+#### Directory contents
+
+| Path | Purpose |
+|---|---|
+| `notes/paths.md` | Single source of truth for canonical file paths on Delta-AI (repo, training inputs, training embeddings by variant, validation embeddings, extraction outputs). Updated whenever a new artefact lands. Every SLURM script still reads paths from env-overridable variables, but `paths.md` is what humans consult. |
+| `notes/tomorrow.md` | Rolling list of parked experiments carried over from the previous day, with rationale and proposed scripts. Cross off when done. |
+| `notes/model_improvement_options.md` | Tiered design doc for strategies to raise PHL rh@1 past the current ceiling. New strategies added here before any code is written, so the plan is visible to all agents. |
+| `notes/handoff_<audience>_<topic>.md` | Handoff notes between agents (described below). |
+
+#### Handoff file naming
+
+Three patterns, in practice:
+
+- **To another specific agent, from me:** `handoff_agent<N>_<topic>.md`
+  Example: `handoff_agent2_light_attention.md` (agent 1 to agent 2 about
+  the light-attention branch).
+- **To me, from another agent:** `handoff_agent1_from_agent<N>.md`
+  Example: `handoff_agent1_from_agent4.md` (agent 4 to agent 1 about
+  the per-head dataset refactor).
+- **Broadcast (to every modelling agent):** `handoff_all_models_from_agent<N>.md`
+  Example: `handoff_all_models_from_agent4.md` (dataset v2 announcement).
+
+Naming is audience-first, author-second (`handoff_<audience>_from_<author>`).
+The topic suffix is used for notes whose content isn't adequately
+summarized by the author–audience pair alone.
+
+#### When to write a handoff note vs. use the lab notebook
+
+- **Handoff note:** content *other agents* act on — a new artefact for
+  them to consume, a finding that changes their plan, a blocker you own.
+- **Lab notebook (`lab_notebook_agent<N>.txt`):** content *you* need
+  later, or that makes your day reproducible — what you ran, job IDs,
+  paths, verification commands. One notebook per agent on their own
+  branch. Agent 1 maintains `lab_notebook_agent1.txt` on main.
+- **Memory files (`~/.claude/projects/…/memory/`):** durable knowledge
+  that survives across conversations — user preferences, project-wide
+  facts, path references. Hand-curated by the agent; not checked into
+  git (per-user state).
+
+The memory system is automatic only in that the main agent writes to
+it; no other agent reads it. Anything that should cross agent
+boundaries belongs in `notes/` or a handoff file, not in memory.
+
+#### Conventions for writing handoff notes
+
+- Lead with a one-line `tl;dr` so the recipient can skim.
+- If it's a request, say what you want, in what format, and how cheap
+  the work is. Always include a "not blocking on" line so the recipient
+  knows how urgent it is.
+- If it's an artefact announcement, list deliverable files, paths,
+  counts, and any blocker the recipient has to clear before using
+  them. Link to provenance (analysis number, code reference, or lab
+  notebook entry).
+- Cross-reference `notes/paths.md` for file locations rather than
+  embedding full paths that may drift — update `paths.md` in the same
+  commit as the handoff.
