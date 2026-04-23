@@ -44,62 +44,106 @@ def iter_input_npzs(inputs):
             print(f'WARNING: skipping unrecognized input {path}', file=sys.stderr)
 
 
-def stream_merge(npz_files, output_path, compress=True):
+def _stream_one_split(npz_path, zout, state):
+    """Stream every key from one input NPZ into an open output zip.
+
+    `state` is a mutable dict carrying seen_keys / duplicates /
+    sample_last_dim / mixed / n_unique across splits. Mutates in place.
+    """
+    data = np.load(npz_path)
+    n_keys = len(data.files)
+    n_new = 0
+    for key in data.files:
+        if key in state['seen_keys']:
+            state['duplicates'] += 1
+            continue
+        state['seen_keys'].add(key)
+        arr = data[key]
+
+        if state['sample_last_dim'] is None and arr.ndim >= 1:
+            state['sample_last_dim'] = int(arr.shape[-1])
+        elif arr.ndim >= 1 and int(arr.shape[-1]) != state['sample_last_dim']:
+            state['mixed'] = True
+
+        # force_zip64 protects against the rare per-protein array that
+        # exceeds 4 GB.
+        member_name = f'{key}.npy'
+        with zout.open(member_name, mode='w', force_zip64=True) as fp:
+            np.lib.format.write_array(fp, arr, allow_pickle=False)
+
+        n_new += 1
+        state['n_unique'] += 1
+
+        # Release this array back to the OS before the next one.
+        del arr
+
+    data.close()
+    return n_keys, n_new
+
+
+def stream_merge(npz_files, output_path, compress=True, delete_inputs=False):
     """Stream-copy every key from each input NPZ into a single output NPZ.
 
     Only one array is held in memory at a time. Returns (n_unique, n_duplicates,
     sample_last_dim, mixed).
+
+    When `delete_inputs=True`:
+      - Each split's unique arrays are streamed into the output.
+      - The zipfile is closed-and-reopened-in-append-mode per split, so
+        the output's central directory is committed to disk after each
+        split completes.
+      - The input split is unlinked only AFTER the output has committed
+        that split's data. Peak disk stays near baseline (splits shrink
+        as output grows). If the process crashes mid-merge, the output
+        is still a valid partial NPZ with every fully-processed split;
+        any already-deleted splits are gone but their data is safe in
+        the output.
+
+    When `delete_inputs=False`:
+      - Existing behaviour: one zipfile open() for the whole merge,
+        slightly faster, but all-or-nothing. Inputs are never touched.
     """
     compression = zipfile.ZIP_DEFLATED if compress else zipfile.ZIP_STORED
-    seen_keys: set = set()
-    duplicates = 0
-    sample_last_dim = None
-    mixed = False
-    n_unique = 0
 
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
 
-    # allowZip64 = True so we can exceed the 4 GB single-file limit.
-    with zipfile.ZipFile(output_path, mode='w',
-                         compression=compression,
-                         allowZip64=True) as zout:
-        for npz_path in npz_files:
-            data = np.load(npz_path)
-            n_keys = len(data.files)
-            n_new = 0
-            for key in data.files:
-                if key in seen_keys:
-                    duplicates += 1
-                    continue
-                seen_keys.add(key)
-                arr = data[key]
+    state = {
+        'seen_keys': set(),
+        'duplicates': 0,
+        'sample_last_dim': None,
+        'mixed': False,
+        'n_unique': 0,
+    }
 
-                if sample_last_dim is None and arr.ndim >= 1:
-                    sample_last_dim = int(arr.shape[-1])
-                elif arr.ndim >= 1 and int(arr.shape[-1]) != sample_last_dim:
-                    mixed = True
+    if delete_inputs:
+        # Fresh start — remove any prior output so we don't append to it.
+        if os.path.exists(output_path):
+            os.unlink(output_path)
+        for i, npz_path in enumerate(npz_files):
+            mode = 'w' if i == 0 else 'a'
+            with zipfile.ZipFile(output_path, mode=mode,
+                                 compression=compression,
+                                 allowZip64=True) as zout:
+                size_mb_before = npz_path.stat().st_size / 1e6
+                n_keys, n_new = _stream_one_split(npz_path, zout, state)
+                print(f'  {npz_path.name}: {n_keys:>7,} keys, {n_new:>7,} new '
+                      f'({size_mb_before:>7,.0f} MB on disk)')
+            # zipfile.close() above has committed the central directory.
+            # It's now safe to delete the input — the output contains
+            # every key from it.
+            npz_path.unlink()
+            print(f'    (deleted {npz_path.name})')
+    else:
+        with zipfile.ZipFile(output_path, mode='w',
+                             compression=compression,
+                             allowZip64=True) as zout:
+            for npz_path in npz_files:
+                size_mb_before = npz_path.stat().st_size / 1e6
+                n_keys, n_new = _stream_one_split(npz_path, zout, state)
+                print(f'  {npz_path.name}: {n_keys:>7,} keys, {n_new:>7,} new '
+                      f'({size_mb_before:>7,.0f} MB on disk)')
 
-                # Write this single array as a .npy member inside the output
-                # zip. force_zip64 protects against the rare per-protein
-                # array that exceeds 4 GB (shouldn't happen at sane
-                # embedding sizes, but belt-and-braces).
-                member_name = f'{key}.npy'
-                with zout.open(member_name, mode='w', force_zip64=True) as fp:
-                    np.lib.format.write_array(fp, arr, allow_pickle=False)
-
-                n_new += 1
-                n_unique += 1
-
-                # Release this array back to the OS before the next one.
-                del arr
-
-            # Release the whole bin before moving on.
-            data.close()
-            size_mb = npz_path.stat().st_size / 1e6
-            print(f'  {npz_path.name}: {n_keys:>7,} keys, {n_new:>7,} new '
-                  f'({size_mb:>7,.0f} MB on disk)')
-
-    return n_unique, duplicates, sample_last_dim, mixed
+    return state['n_unique'], state['duplicates'], state['sample_last_dim'], state['mixed']
 
 
 def main():
@@ -114,6 +158,16 @@ def main():
                         'ZIP_DEFLATED. Faster to write and slightly lower peak '
                         'memory; larger on disk. Useful for very large '
                         'per-residue outputs where compression ratio is low.')
+    p.add_argument('--delete-inputs', action='store_true',
+                   help='Unlink each input NPZ after its arrays have been '
+                        'committed to the output. Use when disk is tight — '
+                        'peak disk stays near baseline because splits shrink '
+                        'as output grows. The output is committed per-split '
+                        '(close-and-reopen-append) so a mid-merge crash '
+                        'leaves a valid partial NPZ with completed splits. '
+                        'IRREVERSIBLE for deleted inputs if the process '
+                        'dies after their data is committed but before '
+                        'the next split completes.')
     args = p.parse_args()
 
     npz_files = list(iter_input_npzs(args.input))
@@ -121,10 +175,13 @@ def main():
         sys.exit('ERROR: no NPZ files found')
 
     print(f'Stream-merging {len(npz_files)} NPZ files '
-          f'(compressed={not args.no_compress}) ...')
+          f'(compressed={not args.no_compress}, '
+          f'delete_inputs={args.delete_inputs}) ...')
 
     n_unique, duplicates, dim, mixed = stream_merge(
-        npz_files, args.output, compress=not args.no_compress)
+        npz_files, args.output,
+        compress=not args.no_compress,
+        delete_inputs=args.delete_inputs)
 
     if duplicates:
         print(f'\nDuplicates skipped: {duplicates:,}')

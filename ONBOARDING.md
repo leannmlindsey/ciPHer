@@ -314,94 +314,22 @@ Four blocks control different aspects of the run:
 - UCSD phages infect 15-25 K-types each
 - Single-label models are structurally unable to handle these
 
-### 4a. PHL ceiling is a representation-granularity problem, not coverage (2026-04-22)
-Three cross-validating findings converge on the same mechanism:
-- **ESM-2 mean space does not distribution-shift PHL.** 90.6% of PHL
-  proteins have a training protein at cosine ≥ 0.99; every PHL protein
-  has a near-identical ESM-2 neighbour.
-- **Those near-identical neighbours carry the wrong K-type.** Top-1
-  nearest neighbour shares a K-type only ~11% of the time (89% wrong);
-  52% of PHL proteins have no K-matching neighbour even in the top-50.
-- **In raw sequence space, PHL is sequence-distant from training.**
-  MMseqs2 finds only 17% of PHL proteins at ≥ 90% identity to any
-  training TSP; a sequence-level 1-NN classifier on MMseqs pct-identity
-  gets 12.6% match on PHL — essentially the rh@1 our trained models
-  achieve.
+### 4a – 4d. Durable findings (see `notes/findings/`)
 
-Implication: scaling ESM-2 will not close the gap (same-family embedding
-compresses K-types the same way). ProtT5's 8× larger K-type cosine gap
-is load-bearing. Next-level improvements come from either (a) a
-K-separating representation (contrastive fine-tuning, structure-based),
-or (b) architecture that preserves local binding-domain signal.
-Provenance: `analyses/02_phl_cluster_mapping/` in
-`CLAUDE_PHI_DATA_ANALYSIS`; `scripts/analysis/phl_training_distance.py`
-and `phl_neighbor_labels.py`.
+As of 2026-04-23 the long-form content previously written inline in
+§§4a–4d has moved to `notes/findings/`, where findings have their own
+structured format (evidence, mechanism, implications, provenance). This
+section keeps a summary index; read the linked file for full detail.
 
-### 4b. K and O heads carry largely independent signal on PHL (A7, 2026-04-22)
-Per-pair head attribution on the current best `attention_mlp + ProtT5
-mean + highconf_pipeline` run (PHL rh@1 = 0.188):
-
-- K-only rh@1 = 0.130
-- O-only rh@1 = 0.164
-- Combined rh@1 = 0.188
-- Only 10 of 61 combined-rh@1 wins had both heads agree; 34 came from
-  the K head, 27 from the O head.
-
-Both heads contribute, and they do not substantially redundantly
-overlap. Dropping either costs 30–40% of current performance.
-Implication: the earlier "O head is noise, drop it for a K-only
-contrastive run" hypothesis is falsified. The right move is to train
-each head on its own clean labels (see §4c).
-
-Provenance: `CLAUDE_PHI_DATA_ANALYSIS/analyses/07_head_attribution/`.
-
-### 4c. Per-head training via v2 highconf lists (2026-04-22)
-The old `highconf_pipeline_positive_K.list` (12,481 proteins, filtered
-on K-cluster purity only) forces a single list on both head losses.
-A K-clean / O-noisy protein injects O-noise into O-head training; a
-K-noisy / O-clean protein is excluded entirely — wasteful.
-
-The v2 dataset ships two independent streams per axis, in two
-variants (strict cl95 and UAT maximal):
-
-| File | Proteins | Serotypes |
-|---|---:|---:|
-| `data/training_data/metadata/highconf_v2/HC_K_cl95.list` | 23,299 | 161 / 161 K-types |
-| `data/training_data/metadata/highconf_v2/HC_K_UAT.list` | 25,924 | 161 / 161 K-types |
-| `data/training_data/metadata/highconf_v2/HC_O_cl95_full_coverage.list` | 14,677 | 22 / 22 O-types |
-| `data/training_data/metadata/highconf_v2/HC_O_UAT.list` | 15,568 | 22 / 22 O-types |
-
-Train two recipes and A/B: **strict** (`HC_K_cl95.list` +
-`HC_O_cl95_full_coverage.list`) or **UAT maximal**
-(`HC_K_UAT.list` + `HC_O_UAT.list`).
-
-**Blocker:** the training pipeline currently takes one positive list
-and applies it to both head losses. Each protein must be masked out of
-the head it is not clean for — a loss-masking change, not an
-architecture change. Conceptually:
-
-```python
-k_mask = protein_id in HC_K_list
-o_mask = protein_id in HC_O_list
-loss = (k_mask * k_loss(k_logits, k_labels)).mean() \
-     + (o_mask * o_loss(o_logits, o_labels)).mean()
-```
-
-Full rationale in `notes/handoff_all_models_from_agent4.md` and
-`notes/handoff_agent1_from_agent4.md`. Filter recipe in
-`CLAUDE_PHI_DATA_ANALYSIS/analyses/13_optimal_highconf/`.
-
-### 4d. Highconf v1 imposes a structural HR@1 ceiling on some datasets (2026-04-22)
-The v1 `highconf_pipeline_positive_K.list` filter drops ~60% of
-K-classes (from ~161 → 64) and ~36% of O-classes (22 → 14) from the
-training label space. Validation pairs whose true K-type is not in the
-surviving class set are guaranteed misses at HR@1 regardless of
-architecture. Empirically, **GORODNICHIV has zero scorable pairs** under
-v1 — 100% of its validation pairs have out-of-set K-types. Agent 2's
-light-attention sweep confirms this across six combinations.
-
-This is one reason the v2 per-head lists (§4c) widen coverage back to
-**161 / 161 K-types** and **22 / 22 O-types**.
+| # | Finding | File |
+|---|---|---|
+| 4a | **PHL ceiling is a training-label domain shift.** Training K-labels come from Kaptive on the prophage-source host; PHL K-labels come from Kaptive on the lytic-target host. Different genomes → 85% K-label disagreement at ≥ 95% AA identity. No pLM, architecture change, or cluster-purity filter can recover from this. Recommendations for how to address are discussed in the finding file and not yet a committed team plan. | `notes/findings/2026-04-22_phl_label_domain_shift.md` |
+| 4a-symptom | **PHL ceiling presents as a representation-granularity problem.** (Symptom-level finding; mechanism is 4a above.) ESM-2 maps PHL proteins to near-identical training neighbours (cos ≥ 0.99 for 90.6%), but those neighbours carry the wrong K-type 89% of the time. | `notes/findings/2026-04-22_phl_ceiling_representation_granularity.md` |
+| 4b | **K and O heads carry largely independent signal on PHL (A7).** On the best v1 run, K-only PHL = 0.130, O-only = 0.164, combined = 0.188 — losing either head costs 30–40%. Dropping the O head as "noise" is falsified. Motivates the per-head v2 dataset design. | `notes/findings/2026-04-22_k_and_o_heads_independent_on_phl.md` |
+| 4c | **Per-head v2 training lists.** Two deliverable recipes (strict cl95, UAT maximal), each with independent K and O lists, under `data/training_data/metadata/highconf_v2/`. Motivated by 4b. Enabled by the 2026-04-22 loss-masking refactor (`--positive_list_k` / `--positive_list_o` on `cipher-train`). See `notes/handoff_all_models_from_agent4.md` + `notes/paths.md`. | (dataset, not a finding) |
+| 4d | **Highconf v1 filter imposes a structural HR@1 ceiling on some datasets.** The v1 list drops ~60% of K-classes and ~36% of O-classes from the training label space. GORODNICHIV has zero scorable pairs under every v1 highconf run as a result. v2 widens coverage back to 161/22. | `notes/findings/2026-04-22_highconf_v1_class_restriction_ceiling.md` |
+| 4e | **Per-dataset optimal eval mode is predicted by phage breadth.** K-only beats default z-score combined eval on every dataset; O-only wins in specific cells (CHEN host, PBIP rank_phages under v2, UCSD rank_phages). A single eval mode cannot be optimal everywhere. Team-best PHL rh@1 = **0.232** (attention_mlp K-only on v1) — not 0.188 combined. | `notes/findings/2026-04-23_head_eval_phage_breadth.md` |
+| 4f | **8-tool RBP detection pipeline has false negatives concentrated on PHL-novel K-types.** ~12% of PHL proteins have a better homolog in the `NOT_flagged_by_any_tool` phold bucket than in `pipeline_positive` — gaps reach +60 pp%. Independent of and additive with the label-shift mechanism (4a). Cheap fix: bootstrap training from PHL's MMseqs-similar tool-missed homologs. | `notes/findings/2026-04-23_rbp_tool_filter_false_negatives.md` |
 
 ### 5. Best models so far (rank-hosts HR@1 per validation dataset)
 
@@ -751,12 +679,13 @@ It is tracked in git and reviewed with the same care as documentation.
 
 #### Directory contents
 
-| Path | Purpose |
-|---|---|
-| `notes/paths.md` | Single source of truth for canonical file paths on Delta-AI (repo, training inputs, training embeddings by variant, validation embeddings, extraction outputs). Updated whenever a new artefact lands. Every SLURM script still reads paths from env-overridable variables, but `paths.md` is what humans consult. |
-| `notes/tomorrow.md` | Rolling list of parked experiments carried over from the previous day, with rationale and proposed scripts. Cross off when done. |
-| `notes/model_improvement_options.md` | Tiered design doc for strategies to raise PHL rh@1 past the current ceiling. New strategies added here before any code is written, so the plan is visible to all agents. |
-| `notes/handoff_<audience>_<topic>.md` | Handoff notes between agents (described below). |
+| Path | Purpose | Lifetime |
+|---|---|---|
+| `notes/findings/` | **Durable project findings** — results of investigation we've established as true, with evidence and mechanism. New findings land here as dated files; index in `notes/findings/README.md`. This is where long-lived knowledge lives, not in handoffs. | durable, append-only |
+| `notes/paths.md` | Single source of truth for canonical file paths on Delta-AI (repo, training inputs, training embeddings by variant, validation embeddings, extraction outputs). Updated whenever a new artefact lands. Every SLURM script still reads paths from env-overridable variables, but `paths.md` is what humans consult. | maintained |
+| `notes/tomorrow.md` | Rolling list of parked experiments carried over from the previous day, with rationale and proposed scripts. Cross off when done. | rolling |
+| `notes/model_improvement_options.md` | Tiered design doc for strategies to raise PHL rh@1 past the current ceiling. New strategies added here before any code is written, so the plan is visible to all agents. | periodic |
+| `notes/handoff_<audience>_<topic>.md` | Handoff notes between agents (described below). | ephemeral |
 
 #### Handoff file naming
 
@@ -775,22 +704,58 @@ Naming is audience-first, author-second (`handoff_<audience>_from_<author>`).
 The topic suffix is used for notes whose content isn't adequately
 summarized by the author–audience pair alone.
 
-#### When to write a handoff note vs. use the lab notebook
+#### When to write a finding vs a handoff vs a lab-notebook entry
 
-- **Handoff note:** content *other agents* act on — a new artefact for
-  them to consume, a finding that changes their plan, a blocker you own.
+Four surfaces, four lifetimes. Pick the one that matches the lifetime
+of what you're writing.
+
+- **Finding (`notes/findings/<date>_<slug>.md`):** durable knowledge
+  about the data or the pipeline — "this is now established as true."
+  Has evidence, mechanism, implications, provenance. Append-only
+  (occasionally superseded or overturned; never silently deleted).
+  Read `notes/findings/README.md` for the structure convention.
+- **Handoff note (`notes/handoff_<audience>_from_<author>.md`):**
+  content *other agents* act on — a new artefact, a blocker you own, a
+  request for a specific experiment. Ephemeral: once the request is
+  fulfilled, the handoff can be deleted. If writing it generated new
+  durable knowledge, extract that into a finding and cross-link.
 - **Lab notebook (`lab_notebook_agent<N>.txt`):** content *you* need
   later, or that makes your day reproducible — what you ran, job IDs,
   paths, verification commands. One notebook per agent on their own
   branch. Agent 1 maintains `lab_notebook_agent1.txt` on main.
 - **Memory files (`~/.claude/projects/…/memory/`):** durable knowledge
-  that survives across conversations — user preferences, project-wide
-  facts, path references. Hand-curated by the agent; not checked into
-  git (per-user state).
+  scoped to the user and the machine — user preferences, path
+  references, per-user state. Hand-curated by the agent; not checked
+  into git. No other agent reads it.
 
-The memory system is automatic only in that the main agent writes to
-it; no other agent reads it. Anything that should cross agent
-boundaries belongs in `notes/` or a handoff file, not in memory.
+Heuristic: if the thing you're writing is likely to still be true and
+useful in a month, it's a finding. If it expires when the recipient
+acts on it, it's a handoff. If it's "here's what I did today," it's a
+lab-notebook entry. If it's "how this specific user works," it's memory.
+
+Writing durable knowledge as a handoff is the most common mistake —
+the knowledge gets lost when the handoff is "done" and deleted. Always
+ask: is this a finding-shaped thing?
+
+#### Broadcasting new findings to all agents
+
+`notes/findings/README.md` contains a reverse-chronological index.
+**Every agent should scan it at session start** and read any finding
+listed above the date of their last session. This is the broadcast
+mechanism — no push notifications needed, just a well-maintained index.
+
+When writing a new finding:
+1. Create the finding file with a date-prefix filename.
+2. Append a row to the index table at the top of
+   `notes/findings/README.md`.
+3. If the finding is *immediately* actionable by a specific agent,
+   also write a short handoff (`notes/handoff_agent<N>_from_<author>.md`)
+   that points at the finding. The handoff is ephemeral; the finding
+   is durable. Don't duplicate content between the two.
+
+Optionally: each finding can declare an `audience:` field in its
+frontmatter (`all-modelling-agents`, `agent-2-only`, etc.) if targeted
+visibility matters. Default is "broadcast" (everyone should read it).
 
 #### Conventions for writing handoff notes
 
