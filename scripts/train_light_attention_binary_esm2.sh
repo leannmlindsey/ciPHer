@@ -49,8 +49,12 @@ VAL_FASTA="${VAL_FASTA:-${DATA_DIR}/validation_data/metadata/validation_rbps_all
 VAL_DATASETS_DIR="${VAL_DATASETS_DIR:-${DATA_DIR}/validation_data/HOST_RANGE}"
 
 # Per-residue ESM-2 650M embeddings (variable-length, used by ConvAttn pooler).
-TRAIN_EMB="${TRAIN_EMB:-/work/hdd/bfzj/llindsey1/embeddings/esm2_650m_full/candidates_esm2_650m_full_md5.npz}"
-VAL_EMB="${VAL_EMB:-/work/hdd/bfzj/llindsey1/validation_embeddings/esm2_650m_full/validation_esm2_650m_full_md5.npz}"
+# Re-extracted 2026-04-24 via the split-extract-merge pipeline after the
+# original file only covered 4,453 MD5s (see 2026-04-21 notebook). New NPZ
+# is 213 GB. Path follows the prott5 convention (no embeddings/ subdir,
+# filename drops model tag).
+TRAIN_EMB="${TRAIN_EMB:-/work/hdd/bfzj/llindsey1/embeddings_full/candidates_embeddings_full_md5.npz}"
+VAL_EMB="${VAL_EMB:-/work/hdd/bfzj/llindsey1/val_esm2_650m_full/validation_esm2_full_md5.npz}"
 EMBEDDING_TYPE="${EMBEDDING_TYPE:-esm2_650m_full}"
 
 # Training-set filter: highconf_pipeline_positive_K (12,481 proteins).

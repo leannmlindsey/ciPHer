@@ -55,7 +55,7 @@ if [ -z "${VAL_EMB:-}" ]; then
             VAL_EMB="/work/hdd/bfzj/llindsey1/val_prott5_xl_full/validation_prott5_full_md5.npz"
             ;;
         *esm2_650m_full*)
-            VAL_EMB="/work/hdd/bfzj/llindsey1/validation_embeddings/esm2_650m_full/validation_esm2_650m_full_md5.npz"
+            VAL_EMB="/work/hdd/bfzj/llindsey1/val_esm2_650m_full/validation_esm2_full_md5.npz"
             ;;
         *)
             echo "ERROR: cannot infer VAL_EMB for ${EXP_NAME}; set VAL_EMB=..." >&2
