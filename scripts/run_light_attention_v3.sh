@@ -145,6 +145,9 @@ for entry in "${VARIANTS[@]}"; do
 
     EXP_DIR="${CIPHER_DIR}/experiments/${MODEL}/${NAME}"
     EVAL_CMD="python -m cipher.evaluation.runner ${EXP_DIR} --val-embedding-file ${VAL_EMB}"
+    EVAL_K_CMD="python -m cipher.evaluation.runner ${EXP_DIR} --val-embedding-file ${VAL_EMB} --head-mode k_only -o ${EXP_DIR}/results/evaluation_k_only.json"
+    EVAL_O_CMD="python -m cipher.evaluation.runner ${EXP_DIR} --val-embedding-file ${VAL_EMB} --head-mode o_only -o ${EXP_DIR}/results/evaluation_o_only.json"
+    EVAL_RAW_CMD="python -m cipher.evaluation.runner ${EXP_DIR} --val-embedding-file ${VAL_EMB} --score-norm raw -o ${EXP_DIR}/results/evaluation_raw.json"
 
     JOB_SCRIPT="#!/bin/bash
 #SBATCH --job-name=${NAME}
@@ -185,16 +188,31 @@ ${TRAIN_CMD}
 
 if [ \"\${VAL_READY}\" = true ]; then
     echo \"\"
-    echo \"=== EVALUATING ===\"
+    echo \"=== EVALUATING (default: zscore combined) ===\"
     ${EVAL_CMD}
+
+    echo \"\"
+    echo \"=== EVALUATING (K-only via --head-mode k_only) ===\"
+    ${EVAL_K_CMD}
+
+    echo \"\"
+    echo \"=== EVALUATING (O-only via --head-mode o_only) ===\"
+    ${EVAL_O_CMD}
+
+    echo \"\"
+    echo \"=== EVALUATING (raw combined via --score-norm raw) ===\"
+    ${EVAL_RAW_CMD}
 fi
 
 echo \"\"
 echo \"======================================\"
 echo \"Done: ${NAME} at \$(date)\"
-echo \"Follow-up analyses:\"
-echo \"  bash scripts/analysis/run_eval_per_head.sh \${EXP_DIR}\"
-echo \"  bash scripts/analysis/run_score_norm_raw.sh \${EXP_DIR}\"
+echo \"Eval JSONs saved to \${EXP_DIR}/results/:\"
+echo \"  evaluation.json           — default (zscore combined)\"
+echo \"  evaluation_k_only.json    — --head-mode k_only\"
+echo \"  evaluation_o_only.json    — --head-mode o_only\"
+echo \"  evaluation_raw.json       — --score-norm raw\"
+echo \"Compare across runs: python3 scripts/analysis/show_eval_all.py [--variant k_only|o_only|raw]\"
 echo \"======================================\"
 "
 

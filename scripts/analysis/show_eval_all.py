@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 """Side-by-side HR@k table across multiple experiment run dirs.
 
-Reads each run's `results/evaluation.json` (or `evaluation_raw.json` if
-`--variant raw` is passed, for comparing the --score-norm raw ablation
-against the default zscore evaluation) and prints one row per run with
-HR@k per dataset. Pure file I/O; safe on login nodes.
+Reads each run's `results/evaluation{,_raw,_k_only,_o_only}.json` (based
+on --variant) and prints one row per run with HR@k per dataset. Pure
+file I/O; safe on login nodes.
+
+Variant → file:
+    default  -> evaluation.json          (zscore combined, cipher-evaluate default)
+    raw      -> evaluation_raw.json      (--score-norm raw)
+    k_only   -> evaluation_k_only.json   (--head-mode k_only)
+    o_only   -> evaluation_o_only.json   (--head-mode o_only)
 
 Usage:
     python scripts/analysis/show_eval_all.py
     python scripts/analysis/show_eval_all.py experiments/light_attention/la_*/
     python scripts/analysis/show_eval_all.py --k 5 --datasets PBIP PhageHostLearn
-    python scripts/analysis/show_eval_all.py --variant raw    # compare --score-norm raw runs
+    python scripts/analysis/show_eval_all.py --variant k_only
+    python scripts/analysis/show_eval_all.py --variant raw
     python scripts/analysis/show_eval_all.py --mode rank_phages
 """
 
@@ -49,11 +55,14 @@ def main():
                    help='HR@k to report (default: 1)')
     p.add_argument('--datasets', nargs='+', default=DEFAULT_DATASETS,
                    help='Datasets to include as columns')
-    p.add_argument('--variant', choices=('default', 'raw'), default='default',
-                   help='Which evaluation.json to read. "default" -> '
-                        '{run}/results/evaluation.json; "raw" -> '
-                        '{run}/results/evaluation_raw.json (for comparing the '
-                        '--score-norm raw ablation output).')
+    p.add_argument('--variant',
+                   choices=('default', 'raw', 'k_only', 'o_only'),
+                   default='default',
+                   help='Which evaluation JSON to read:'
+                        ' "default"->evaluation.json (zscore combined, cipher-evaluate default);'
+                        ' "raw"->evaluation_raw.json (--score-norm raw);'
+                        ' "k_only"->evaluation_k_only.json (--head-mode k_only);'
+                        ' "o_only"->evaluation_o_only.json (--head-mode o_only).')
     p.add_argument('--mode', choices=('rank_hosts', 'rank_phages'),
                    default='rank_hosts',
                    help='Which ranking direction to show (default: rank_hosts)')
@@ -75,8 +84,12 @@ def main():
               file=sys.stderr)
         return 1
 
-    eval_filename = ('evaluation.json' if args.variant == 'default'
-                     else 'evaluation_raw.json')
+    eval_filename = {
+        'default': 'evaluation.json',
+        'raw': 'evaluation_raw.json',
+        'k_only': 'evaluation_k_only.json',
+        'o_only': 'evaluation_o_only.json',
+    }[args.variant]
     k = str(args.k)
     datasets = args.datasets
 

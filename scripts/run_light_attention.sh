@@ -179,6 +179,9 @@ for entry in "${PROFILES[@]}"; do
 
     EXP_DIR="${CIPHER_DIR}/experiments/${MODEL}/${NAME}"
     EVAL_CMD="python -m cipher.evaluation.runner ${EXP_DIR} --val-embedding-file ${VAL_EMB}"
+    EVAL_K_CMD="python -m cipher.evaluation.runner ${EXP_DIR} --val-embedding-file ${VAL_EMB} --head-mode k_only -o ${EXP_DIR}/results/evaluation_k_only.json"
+    EVAL_O_CMD="python -m cipher.evaluation.runner ${EXP_DIR} --val-embedding-file ${VAL_EMB} --head-mode o_only -o ${EXP_DIR}/results/evaluation_o_only.json"
+    EVAL_RAW_CMD="python -m cipher.evaluation.runner ${EXP_DIR} --val-embedding-file ${VAL_EMB} --score-norm raw -o ${EXP_DIR}/results/evaluation_raw.json"
 
     JOB_SCRIPT="#!/bin/bash
 #SBATCH --job-name=${NAME}
@@ -224,19 +227,30 @@ ${TRAIN_CMD}
 
 if [ \"\${VAL_READY}\" = true ]; then
     echo \"\"
-    echo \"=== EVALUATING ===\"
+    echo \"=== EVALUATING (default: zscore combined) ===\"
     ${EVAL_CMD}
+
+    echo \"\"
+    echo \"=== EVALUATING (K-only via --head-mode k_only) ===\"
+    ${EVAL_K_CMD}
+
+    echo \"\"
+    echo \"=== EVALUATING (O-only via --head-mode o_only) ===\"
+    ${EVAL_O_CMD}
+
+    echo \"\"
+    echo \"=== EVALUATING (raw combined via --score-norm raw) ===\"
+    ${EVAL_RAW_CMD}
 else
     echo \"\"
     echo \"SKIPPING evaluation: validation embeddings not yet available.\"
-    echo \"Generate them, then run:\"
-    echo \"  ${EVAL_CMD}\"
 fi
 
 echo \"\"
 echo \"======================================\"
 echo \"Done: ${NAME}\"
 echo \"  Finished: \$(date)\"
+echo \"Eval JSONs in \${EXP_DIR}/results/: evaluation{,_k_only,_o_only,_raw}.json\"
 echo \"======================================\"
 "
 
