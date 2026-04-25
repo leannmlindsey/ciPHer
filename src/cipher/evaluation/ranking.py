@@ -32,9 +32,8 @@ def rank_hosts(predictor, phage_proteins, candidate_hosts, serotypes,
         list of (host_id, score) sorted by score descending
     """
     prot_md5s = [pid_md5[p] for p in phage_proteins if p in pid_md5]
-    prot_embs = [emb_dict[m] for m in prot_md5s if m in emb_dict]
 
-    if not prot_embs:
+    if not prot_md5s:
         return []
 
     host_scores = []
@@ -43,7 +42,10 @@ def rank_hosts(predictor, phage_proteins, candidate_hosts, serotypes,
             continue
         host_k = serotypes[host]['K']
         host_o = serotypes[host]['O']
-        score = predictor.score_pair(prot_embs, host_k, host_o)
+        # score_phage_md5s defers to score_pair for single-embedding
+        # predictors; dual-embedding predictors override it to look up
+        # K and O embeddings from their own per-head dicts.
+        score = predictor.score_phage_md5s(prot_md5s, host_k, host_o, emb_dict)
         if score is not None:
             host_scores.append((host, score))
 
@@ -77,9 +79,8 @@ def rank_phages(predictor, host_id, candidate_phages, phage_protein_map,
     for phage in candidate_phages:
         proteins = phage_protein_map.get(phage, set())
         prot_md5s = [pid_md5[p] for p in proteins if p in pid_md5]
-        prot_embs = [emb_dict[m] for m in prot_md5s if m in emb_dict]
 
-        score = predictor.score_pair(prot_embs, host_k, host_o)
+        score = predictor.score_phage_md5s(prot_md5s, host_k, host_o, emb_dict)
         if score is not None:
             phage_scores.append((phage, score))
 
