@@ -47,7 +47,7 @@ TRAIN_EMB="${TRAIN_EMB:-/projects/bfzj/llindsey1/RBP_Structural_Similarity/outpu
 VAL_EMB="${VAL_EMB:-/projects/bfzj/llindsey1/PHI_TSP/phi_tsp/klebsiella/validation_data/combined/validation_inputs/validation_embeddings_md5.npz}"
 
 # Match old hyperparameters exactly
-NAME="repro_old_v3_full_in_cipher"
+NAME="${NAME:-repro_old_v3_canonical_in_cipher}"
 MODEL="attention_mlp"
 LR="1e-05"
 BATCH_SIZE=64
@@ -76,6 +76,7 @@ TRAIN_CMD="python -m cipher.cli.train_runner \
     --max_k_types ${MAX_K_TYPES} \
     --max_o_types ${MAX_O_TYPES} \
     --label_strategy ${LABEL_STRATEGY} \
+    --split-style canonical \
     --lr ${LR} \
     --batch_size ${BATCH_SIZE} \
     --epochs ${EPOCHS} \

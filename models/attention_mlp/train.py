@@ -308,53 +308,90 @@ def train(experiment_dir, config):
     # Save training data summary
     td.save(experiment_dir)
 
-    # Step 2: Create train/val/test splits — INDEPENDENT for K and O.
-    # K head uses a K-stratified split over MD5s with K labels.
-    # O head uses an O-stratified split over MD5s with O labels.
-    # This ensures each head gets balanced rare-class representation.
-    print('\nStep 2: Creating independent K and O splits...')
+    # Step 2: Create train/val/test splits.
+    # Two styles supported (controlled by training.split_style in the config):
+    #   'independent' (default, backwards-compat): K and O get separate
+    #       stratified splits, with seeds `seed` and `seed+1`. K head's
+    #       held-out is a different MD5 set than O head's.
+    #   'canonical' (matches the old klebsiella `create_canonical_split`):
+    #       ONE shared split keyed on primary K (with O-fallback when K is
+    #       null/N/A). Both heads see the same train/val/test partition;
+    #       the labels they see differ because K and O label vectors do.
+    split_style = str(train_cfg.get('split_style', 'independent')).lower()
+    print(f'\nStep 2: Creating splits (style={split_style})...')
 
     def md5s_with_labels(labels, md5_list):
         """Return MD5s that have at least one nonzero label."""
         keep = (labels > 0).any(axis=1)
         return [m for m, k in zip(md5_list, keep) if k]
 
-    def primary_class(md5, labels, md5_to_idx, classes):
-        return classes[int(labels[md5_to_idx[m]].argmax())]
-
     md5_to_idx_full = {m: i for i, m in enumerate(td.md5_list)}
 
-    # K split
-    set_seed(seed)
-    k_md5s = md5s_with_labels(td.k_labels, td.md5_list)
-    primary_k = [td.k_classes[int(td.k_labels[md5_to_idx_full[m]].argmax())]
-                 for m in k_md5s]
-    splits_k = create_stratified_split(
-        k_md5s, primary_k,
-        train_ratio=train_cfg.get('train_ratio', 0.7),
-        val_ratio=train_cfg.get('val_ratio', 0.15),
-        seed=seed,
-    )
-    print(f'  K split:  Train: {len(splits_k["train"])}, '
-          f'Val: {len(splits_k["val"])}, '
-          f'Test: {len(splits_k["test"])} '
-          f'(of {len(k_md5s)} K-labeled MD5s)')
+    if split_style == 'canonical':
+        from cipher.data.splits import create_canonical_split
+        set_seed(seed)
+        canonical = create_canonical_split(
+            md5_list=td.md5_list,
+            k_labels=td.k_labels,
+            o_labels=td.o_labels,
+            k_classes=td.k_classes,
+            o_classes=td.o_classes,
+            train_ratio=train_cfg.get('train_ratio', 0.7),
+            val_ratio=train_cfg.get('val_ratio', 0.15),
+            seed=seed,
+        )
+        # Use the same canonical split for both heads. Filter each head's
+        # split to MD5s that actually have a positive label for that head
+        # (so K head training/eval doesn't include MD5s where the K row
+        # is all zero, and same for O).
+        k_labeled = set(md5s_with_labels(td.k_labels, td.md5_list))
+        o_labeled = set(md5s_with_labels(td.o_labels, td.md5_list))
+        splits_k = {s: [m for m in canonical[s] if m in k_labeled]
+                    for s in ('train', 'val', 'test')}
+        splits_o = {s: [m for m in canonical[s] if m in o_labeled]
+                    for s in ('train', 'val', 'test')}
+        print(f'  Canonical split (one shared partition for both heads):')
+        print(f'    Train: {len(canonical["train"])}, '
+              f'Val: {len(canonical["val"])}, '
+              f'Test: {len(canonical["test"])}')
+        print(f'    K head sees: train={len(splits_k["train"])}, '
+              f'val={len(splits_k["val"])}, test={len(splits_k["test"])} '
+              f'(MD5s with K label > 0)')
+        print(f'    O head sees: train={len(splits_o["train"])}, '
+              f'val={len(splits_o["val"])}, test={len(splits_o["test"])} '
+              f'(MD5s with O label > 0)')
+    else:
+        # K split
+        set_seed(seed)
+        k_md5s = md5s_with_labels(td.k_labels, td.md5_list)
+        primary_k = [td.k_classes[int(td.k_labels[md5_to_idx_full[m]].argmax())]
+                     for m in k_md5s]
+        splits_k = create_stratified_split(
+            k_md5s, primary_k,
+            train_ratio=train_cfg.get('train_ratio', 0.7),
+            val_ratio=train_cfg.get('val_ratio', 0.15),
+            seed=seed,
+        )
+        print(f'  K split:  Train: {len(splits_k["train"])}, '
+              f'Val: {len(splits_k["val"])}, '
+              f'Test: {len(splits_k["test"])} '
+              f'(of {len(k_md5s)} K-labeled MD5s)')
 
-    # O split (use seed+1 so the splits are not artificially correlated)
-    set_seed(seed + 1)
-    o_md5s = md5s_with_labels(td.o_labels, td.md5_list)
-    primary_o = [td.o_classes[int(td.o_labels[md5_to_idx_full[m]].argmax())]
-                 for m in o_md5s]
-    splits_o = create_stratified_split(
-        o_md5s, primary_o,
-        train_ratio=train_cfg.get('train_ratio', 0.7),
-        val_ratio=train_cfg.get('val_ratio', 0.15),
-        seed=seed + 1,
-    )
-    print(f'  O split:  Train: {len(splits_o["train"])}, '
-          f'Val: {len(splits_o["val"])}, '
-          f'Test: {len(splits_o["test"])} '
-          f'(of {len(o_md5s)} O-labeled MD5s)')
+        # O split (use seed+1 so the splits are not artificially correlated)
+        set_seed(seed + 1)
+        o_md5s = md5s_with_labels(td.o_labels, td.md5_list)
+        primary_o = [td.o_classes[int(td.o_labels[md5_to_idx_full[m]].argmax())]
+                     for m in o_md5s]
+        splits_o = create_stratified_split(
+            o_md5s, primary_o,
+            train_ratio=train_cfg.get('train_ratio', 0.7),
+            val_ratio=train_cfg.get('val_ratio', 0.15),
+            seed=seed + 1,
+        )
+        print(f'  O split:  Train: {len(splits_o["train"])}, '
+              f'Val: {len(splits_o["val"])}, '
+              f'Test: {len(splits_o["test"])} '
+              f'(of {len(o_md5s)} O-labeled MD5s)')
 
     # Save both splits
     with open(os.path.join(experiment_dir, 'splits_k.json'), 'w') as f:

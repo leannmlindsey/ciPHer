@@ -95,6 +95,8 @@ def apply_overrides(config, args):
         exp.pop('protein_set', None)
     if args.heads is not None:
         config.setdefault('training', {})['heads'] = args.heads
+    if args.split_style is not None:
+        config.setdefault('training', {})['split_style'] = args.split_style
     if args.min_sources is not None:
         config.setdefault('experiment', {})['min_sources'] = args.min_sources
     if args.max_k_types is not None:
@@ -423,6 +425,15 @@ Examples:
                              'lambda to 0. Orthogonal to the positive-list '
                              'flags — you can set per-head lists and still '
                              'train only one head.')
+    parser.add_argument('--split-style', choices=('independent', 'canonical'),
+                        default=None,
+                        help='How to split into train/val/test for the K and '
+                             'O heads. "independent" (default): K and O get '
+                             'separate stratified splits with seeds (s, s+1). '
+                             '"canonical" (matches the old klebsiella '
+                             'pipeline): one shared split keyed on primary K '
+                             '(with O-fallback when K is null/N/A); both heads '
+                             'see the same train/val/test partition.')
     parser.add_argument('--positive_list',
                         help='Path to a positive-list file (one protein ID per line). '
                              'Filters candidates to these IDs only. Mutually '
