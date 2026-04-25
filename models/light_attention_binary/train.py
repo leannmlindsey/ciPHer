@@ -12,6 +12,7 @@ Per-head pipeline:
     - AdamW, cosine LR schedule, early stopping on val f1_macro.
 """
 
+import glob
 import json
 import os
 import random
@@ -38,6 +39,60 @@ from model import (
 _SUPPORTED_STRATEGIES = {
     'multi_label', 'multi_label_threshold', 'weighted_multi_label',
 }
+
+
+def load_embeddings_or_bins(emb_path, md5_filter=None, log=print):
+    """Load embeddings from an NPZ file OR a directory of split-bin NPZs.
+
+    The merge step that combines per-length-bin extraction output into a
+    single NPZ has been fragile under disk-quota pressure (see 2026-04-25
+    notebook entry: a 199 GiB merged file truncated mid-write twice).
+    Loading directly from the bin directory skips the merge entirely,
+    saving ~199 GiB of disk per pLM and avoiding the OOM/quota failure mode.
+
+    Behaviour:
+        - If `emb_path` is a directory, all `*.npz` files inside are read in
+          sorted order and unified into a single dict. Duplicate MD5 keys
+          across bins are resolved as "first wins" (this should not happen
+          with a clean extraction, but might after a partial resume).
+        - If `emb_path` is a file, falls back to `cipher.data.embeddings.
+          load_embeddings` (unchanged single-file behaviour).
+
+    Args:
+        emb_path: Path to a .npz file, OR a directory containing .npz files.
+        md5_filter: Optional iterable of MD5s to keep. Reduces memory
+            substantially (~20 GiB instead of ~199 GiB for ESM-2 650M
+            per-residue with the highconf filter).
+        log: callable for status output (default `print`).
+
+    Returns:
+        dict {md5_hash: numpy_array}.
+    """
+    if not os.path.isdir(emb_path):
+        return load_embeddings(emb_path, md5_filter=md5_filter)
+
+    bin_paths = sorted(glob.glob(os.path.join(emb_path, '*.npz')))
+    if not bin_paths:
+        raise FileNotFoundError(f'No .npz files in directory: {emb_path}')
+
+    md5_filter = set(md5_filter) if md5_filter is not None else None
+    out = {}
+    for p in bin_paths:
+        data = np.load(p)
+        n_kept = 0
+        n_dup = 0
+        for k in data.files:
+            if md5_filter is not None and k not in md5_filter:
+                continue
+            if k in out:
+                n_dup += 1
+                continue
+            out[k] = data[k]
+            n_kept += 1
+        suffix = f' ({n_dup} duplicates skipped)' if n_dup else ''
+        log(f'  bin {os.path.basename(p)}: {n_kept} keys loaded'
+            f' (of {len(data.files)} in bin){suffix}')
+    return out
 
 
 def check_embedding_coverage(split_md5s, emb_dict, min_coverage,
@@ -379,7 +434,7 @@ def train(experiment_dir, config):
         'embedding_file',
         'data/training_data/embeddings/esm2_650m_full_md5.npz')
     md5_set = set(td.md5_list)
-    emb_dict = load_embeddings(emb_file, md5_filter=md5_set)
+    emb_dict = load_embeddings_or_bins(emb_file, md5_filter=md5_set)
     print(f'  Loaded {len(emb_dict)} embeddings from {emb_file}')
 
     # Hard-fail if the embedding file doesn't cover at least this fraction

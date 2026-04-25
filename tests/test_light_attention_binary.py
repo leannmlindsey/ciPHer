@@ -28,7 +28,7 @@ from model import (  # noqa: E402
     bce_loss,
 )
 from predict import LightAttentionBinaryPredictor  # noqa: E402
-from train import check_embedding_coverage  # noqa: E402
+from train import check_embedding_coverage, load_embeddings_or_bins  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -285,3 +285,65 @@ class TestEmbeddingCoverageGuard:
         md5s = ['a', 'b', 'c']
         valid = check_embedding_coverage(md5s, {}, 0.0, 'k/train', '/fake.npz')
         assert valid == []
+
+
+# ---------------------------------------------------------------------------
+# load_embeddings_or_bins (directory of NPZs vs single file)
+# ---------------------------------------------------------------------------
+
+class TestLoadEmbeddingsOrBins:
+    def _silent(self, *args, **kwargs):
+        pass
+
+    def test_single_file_path_unchanged(self, tmp_path):
+        """Passing a .npz file should fall through to load_embeddings."""
+        path = tmp_path / 'emb.npz'
+        np.savez(path, a=np.ones((3, 4), dtype=np.float32),
+                       b=np.zeros((2, 4), dtype=np.float32))
+        out = load_embeddings_or_bins(str(path))
+        assert set(out.keys()) == {'a', 'b'}
+        np.testing.assert_array_equal(out['a'], np.ones((3, 4), dtype=np.float32))
+
+    def test_directory_loads_all_bins(self, tmp_path):
+        """Loading from a directory should union all *.npz files."""
+        bin_dir = tmp_path / 'bins'
+        bin_dir.mkdir()
+        np.savez(bin_dir / 'maxlen128.npz', a=np.ones((2, 3), dtype=np.float32))
+        np.savez(bin_dir / 'maxlen256.npz', b=np.ones((4, 3), dtype=np.float32) * 2)
+        np.savez(bin_dir / 'maxlen512.npz', c=np.ones((8, 3), dtype=np.float32) * 3)
+        out = load_embeddings_or_bins(str(bin_dir), log=self._silent)
+        assert set(out.keys()) == {'a', 'b', 'c'}
+        np.testing.assert_array_equal(out['b'], np.ones((4, 3), dtype=np.float32) * 2)
+
+    def test_md5_filter_reduces_memory(self, tmp_path):
+        """md5_filter should drop unwanted keys before they enter the dict."""
+        bin_dir = tmp_path / 'bins'
+        bin_dir.mkdir()
+        np.savez(bin_dir / 'b1.npz',
+                 keep1=np.ones((2, 3), dtype=np.float32),
+                 drop1=np.zeros((2, 3), dtype=np.float32))
+        np.savez(bin_dir / 'b2.npz',
+                 keep2=np.ones((2, 3), dtype=np.float32) * 5,
+                 drop2=np.zeros((2, 3), dtype=np.float32))
+        out = load_embeddings_or_bins(str(bin_dir),
+                                       md5_filter={'keep1', 'keep2'},
+                                       log=self._silent)
+        assert set(out.keys()) == {'keep1', 'keep2'}
+
+    def test_duplicate_keys_first_wins(self, tmp_path):
+        """If two bins share an MD5 (shouldn't happen post-extraction but
+        could after a partial resume), keep the first occurrence and skip
+        the second silently."""
+        bin_dir = tmp_path / 'bins'
+        bin_dir.mkdir()
+        np.savez(bin_dir / 'aaa.npz', dup=np.ones((2, 3), dtype=np.float32))
+        np.savez(bin_dir / 'bbb.npz', dup=np.ones((2, 3), dtype=np.float32) * 99)
+        out = load_embeddings_or_bins(str(bin_dir), log=self._silent)
+        # First-sorted bin (aaa.npz) wins
+        np.testing.assert_array_equal(out['dup'], np.ones((2, 3), dtype=np.float32))
+
+    def test_empty_directory_raises(self, tmp_path):
+        empty = tmp_path / 'no_bins'
+        empty.mkdir()
+        with pytest.raises(FileNotFoundError, match='No .npz files'):
+            load_embeddings_or_bins(str(empty), log=self._silent)

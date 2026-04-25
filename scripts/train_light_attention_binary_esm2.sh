@@ -49,11 +49,12 @@ VAL_FASTA="${VAL_FASTA:-${DATA_DIR}/validation_data/metadata/validation_rbps_all
 VAL_DATASETS_DIR="${VAL_DATASETS_DIR:-${DATA_DIR}/validation_data/HOST_RANGE}"
 
 # Per-residue ESM-2 650M embeddings (variable-length, used by ConvAttn pooler).
-# Re-extracted 2026-04-24 via the split-extract-merge pipeline after the
-# original file only covered 4,453 MD5s (see 2026-04-21 notebook). New NPZ
-# is 213 GB. Path follows the prott5 convention (no embeddings/ subdir,
-# filename drops model tag).
-TRAIN_EMB="${TRAIN_EMB:-/work/hdd/bfzj/llindsey1/embeddings_full/candidates_embeddings_full_md5.npz}"
+# Updated 2026-04-25 to point at the per-length-bin DIRECTORY, not a merged
+# NPZ. The merge step kept failing under /work/hdd/bfzj quota pressure
+# (213 GB output truncated mid-write twice). train.py's
+# `load_embeddings_or_bins` handles a directory transparently and saves
+# the ~199 GB merged-file footprint.
+TRAIN_EMB="${TRAIN_EMB:-/work/hdd/bfzj/llindsey1/embeddings_full/split_embeddings}"
 VAL_EMB="${VAL_EMB:-/work/hdd/bfzj/llindsey1/val_esm2_650m_full/validation_esm2_full_md5.npz}"
 EMBEDDING_TYPE="${EMBEDDING_TYPE:-esm2_650m_full}"
 
@@ -158,8 +159,8 @@ echo \"  Positive list:    ${POSITIVE_LIST}\"
 echo \"  Started: \$(date)\"
 echo \"======================================\"
 
-if [ ! -f \"${TRAIN_EMB}\" ]; then
-    echo \"ERROR: training embedding file not found: ${TRAIN_EMB}\"
+if [ ! -e \"${TRAIN_EMB}\" ]; then
+    echo \"ERROR: training embedding path not found: ${TRAIN_EMB}\"
     exit 1
 fi
 
