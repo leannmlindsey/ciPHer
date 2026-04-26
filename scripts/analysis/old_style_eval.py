@@ -84,40 +84,26 @@ def _resolve_val_paths(experiment_dir, cli):
     }
 
 
-def _precompute_probs(predictor, md5s, emb_dict):
-    """Return (md5_to_idx, k_probs[N,Kc] or None, o_probs[N,Oc] or None,
-              k_classes, o_classes)."""
-    k_classes = list(predictor.k_classes) if predictor.k_classes else []
-    o_classes = list(predictor.o_classes) if predictor.o_classes else []
+def _precompute_head_probs(predictor, classes, head_key, emb_dict, md5s):
+    """Run predictor on each MD5's embedding, extract one head's prob vector.
 
-    k_idx = {c: i for i, c in enumerate(k_classes)}
-    o_idx = {c: i for i, c in enumerate(o_classes)}
-
-    rows_md5 = []
-    k_rows = [] if k_classes else None
-    o_rows = [] if o_classes else None
+    Returns dict {md5: ndarray[len(classes)]}. Skips MD5s missing from
+    emb_dict. If `classes` is empty (head not present), returns {}.
+    """
+    if not classes:
+        return {}
+    idx = {c: i for i, c in enumerate(classes)}
+    out = {}
     for m in md5s:
         if m not in emb_dict:
             continue
-        out = predictor.predict_protein(emb_dict[m])
-        rows_md5.append(m)
-        if k_classes:
-            kp = np.zeros(len(k_classes), dtype=np.float32)
-            for c, p in out.get('k_probs', {}).items():
-                if c in k_idx:
-                    kp[k_idx[c]] = float(p)
-            k_rows.append(kp)
-        if o_classes:
-            op = np.zeros(len(o_classes), dtype=np.float32)
-            for c, p in out.get('o_probs', {}).items():
-                if c in o_idx:
-                    op[o_idx[c]] = float(p)
-            o_rows.append(op)
-
-    md5_to_idx = {m: i for i, m in enumerate(rows_md5)}
-    k_arr = np.stack(k_rows) if k_rows else None
-    o_arr = np.stack(o_rows) if o_rows else None
-    return md5_to_idx, k_arr, o_arr, k_classes, o_classes
+        preds = predictor.predict_protein(emb_dict[m])
+        vec = np.zeros(len(classes), dtype=np.float32)
+        for c, p in preds.get(head_key, {}).items():
+            if c in idx:
+                vec[idx[c]] = float(p)
+        out[m] = vec
+    return out
 
 
 def _rank_in_merged(k_probs, o_probs, k_classes, o_classes, true_k, true_o):
@@ -160,8 +146,31 @@ def _rank_in_head(probs, classes, target):
     return None
 
 
-def evaluate_dataset(predictor, dataset_dir, dataset_name,
-                     emb_dict, pid_md5, max_k=20):
+def evaluate_dataset(dataset_dir, dataset_name,
+                     md5_to_kvec, md5_to_ovec,
+                     k_classes, o_classes,
+                     pid_md5, max_k=20):
+    """Score one validation dataset.
+
+    Strict denominator: every positive pair counts. Pairs whose phage has
+    no RBP embeddings, or whose true label is out-of-vocab, are recorded
+    as misses (rank = None). They do NOT get excluded — that would let
+    embedding-input models off the hook for failures of coverage.
+
+    Returns three families of HR@k curves:
+      - hr_at_k                  merged class-ranking HR@k over ALL pairs
+      - k_hr_at_k / o_hr_at_k    per-head HR@k over ALL pairs (strict)
+      - or_hr_at_k               (K-rank ≤ k) OR (O-rank ≤ k) over ALL pairs
+                                 — perfect-merge ceiling
+    Plus the in-vocab variants (denominator = pairs with that head's true
+    label in vocab AND an embedding for at least one RBP), kept for
+    cross-paper comparison.
+
+    Args:
+        md5_to_kvec: dict {md5: K-prob ndarray} (empty if no K head)
+        md5_to_ovec: dict {md5: O-prob ndarray} (empty if no O head)
+        k_classes / o_classes: matching class lists (or []).
+    """
     pairs = load_interaction_pairs(dataset_dir)
     pm_path = os.path.join(dataset_dir, 'metadata', 'phage_protein_mapping.csv')
     phage_map = load_phage_protein_mapping(pm_path)
@@ -172,21 +181,15 @@ def evaluate_dataset(predictor, dataset_dir, dataset_name,
         interactions[p['phage_id']][p['host_id']] = p['label']
         serotypes[p['host_id']] = {'K': p['host_K'], 'O': p['host_O']}
 
-    needed = set()
-    for proteins in phage_map.values():
-        for pid in proteins:
-            m = pid_md5.get(pid)
-            if m is not None and m in emb_dict:
-                needed.add(m)
-    md5_to_idx, k_arr, o_arr, k_classes, o_classes = _precompute_probs(
-        predictor, sorted(needed), emb_dict)
-
-    n_pairs = 0
-    n_skip_no_rbp = 0
-    n_skip_no_emb = 0
-    merged_ranks = []
-    k_only_ranks = []
-    o_only_ranks = []
+    # One record per positive pair WHERE the phage has at least one RBP in
+    # pid_md5 (i.e. an annotated RBP whose sequence is in the FASTA). Pairs
+    # with zero annotated RBPs are excluded — there is literally no input
+    # for an RBP-embedding model to operate on.
+    #
+    # Pairs WITH annotated RBPs but missing embeddings (NPZ coverage gap)
+    # are KEPT and recorded as misses — that's a model coverage failure
+    # the metric should reflect, not normalize away.
+    per_pair = []  # list of dicts: {merged, k_rank, o_rank, has_data, k_in_vocab, o_in_vocab}
 
     for phage in sorted(interactions):
         pos_hosts = [h for h, lbl in interactions[phage].items() if lbl == 1]
@@ -194,30 +197,30 @@ def evaluate_dataset(predictor, dataset_dir, dataset_name,
             continue
 
         proteins = phage_map.get(phage, set())
-        if not proteins:
-            n_skip_no_rbp += len(pos_hosts)
+        annotated_md5s = [pid_md5[p] for p in proteins if p in pid_md5]
+        # Phage has no annotated RBPs at all: skip (out of scope).
+        if not annotated_md5s:
             continue
 
-        # Per-RBP probs
+        # Per-RBP probs (None for either head if MD5 missing from that head's NPZ)
         rbp_probs = []
         for pid in proteins:
             md5 = pid_md5.get(pid)
-            if md5 is None or md5 not in md5_to_idx:
+            if md5 is None:
                 continue
-            i = md5_to_idx[md5]
-            kp = k_arr[i] if k_arr is not None else None
-            op = o_arr[i] if o_arr is not None else None
+            kp = md5_to_kvec.get(md5)
+            op = md5_to_ovec.get(md5)
+            if kp is None and op is None:
+                continue
             rbp_probs.append((pid, kp, op))
-
-        if not rbp_probs:
-            n_skip_no_emb += len(pos_hosts)
-            continue
 
         for pos_h in pos_hosts:
             if pos_h not in serotypes:
                 continue
             true_k = serotypes[pos_h]['K']
             true_o = serotypes[pos_h]['O']
+            k_in_vocab = bool(k_classes) and _is_real(true_k) and true_k in k_classes
+            o_in_vocab = bool(o_classes) and _is_real(true_o) and true_o in o_classes
 
             best_merged = None
             best_k = None
@@ -233,119 +236,216 @@ def evaluate_dataset(predictor, dataset_dir, dataset_name,
                 if ro is not None and (best_o is None or ro < best_o):
                     best_o = ro
 
-            if best_merged is None and best_k is None and best_o is None:
-                continue
+            per_pair.append({
+                'merged_rank': best_merged,
+                'k_rank': best_k,
+                'o_rank': best_o,
+                'has_data': bool(rbp_probs),
+                'k_in_vocab': k_in_vocab,
+                'o_in_vocab': o_in_vocab,
+            })
 
-            n_pairs += 1
-            merged_ranks.append(best_merged if best_merged is not None else float('inf'))
-            if best_k is not None:
-                k_only_ranks.append(best_k)
-            if best_o is not None:
-                o_only_ranks.append(best_o)
+    n = len(per_pair)
+    n_with_data = sum(1 for r in per_pair if r['has_data'])
+    n_with_k = sum(1 for r in per_pair if r['k_in_vocab'] and r['has_data'])
+    n_with_o = sum(1 for r in per_pair if r['o_in_vocab'] and r['has_data'])
 
-    def hr_curve(ranks, max_k):
-        return {k: float(np.mean([1 if r <= k else 0 for r in ranks])) if ranks else 0.0
-                for k in range(1, max_k + 1)}
+    def hr_strict(field, k):
+        if n == 0: return 0.0
+        return sum(1 for r in per_pair
+                   if r[field] is not None and r[field] <= k) / n
+
+    def hr_or(k):
+        if n == 0: return 0.0
+        return sum(1 for r in per_pair if
+                   (r['k_rank'] is not None and r['k_rank'] <= k) or
+                   (r['o_rank'] is not None and r['o_rank'] <= k)) / n
+
+    def hr_in_vocab(field, vocab_field, k):
+        denom = sum(1 for r in per_pair if r[vocab_field] and r['has_data'])
+        if denom == 0: return 0.0
+        return sum(1 for r in per_pair
+                   if r[vocab_field] and r['has_data']
+                   and r[field] is not None and r[field] <= k) / denom
 
     return {
         'dataset': dataset_name,
-        'n_pairs': n_pairs,
-        'n_skipped_no_rbp': n_skip_no_rbp,
-        'n_skipped_no_embedding': n_skip_no_emb,
-        'has_k_head': bool(k_classes and k_arr is not None),
-        'has_o_head': bool(o_classes and o_arr is not None),
+        'n_pairs': n,
+        'n_with_data': n_with_data,
+        'n_with_k': n_with_k,
+        'n_with_o': n_with_o,
+        'has_k_head': bool(k_classes and md5_to_kvec),
+        'has_o_head': bool(o_classes and md5_to_ovec),
         'n_k_classes': len(k_classes),
         'n_o_classes': len(o_classes),
-        'hr_at_k': hr_curve(merged_ranks, max_k),
-        'k_hr_at_k': hr_curve(k_only_ranks, max_k),
-        'o_hr_at_k': hr_curve(o_only_ranks, max_k),
-        'n_with_k': len(k_only_ranks),
-        'n_with_o': len(o_only_ranks),
+        # Strict (over n_pairs): the right thing to compare across models.
+        'hr_at_k': {k: hr_strict('merged_rank', k) for k in range(1, max_k + 1)},
+        'k_hr_at_k': {k: hr_strict('k_rank', k) for k in range(1, max_k + 1)},
+        'o_hr_at_k': {k: hr_strict('o_rank', k) for k in range(1, max_k + 1)},
+        'or_hr_at_k': {k: hr_or(k) for k in range(1, max_k + 1)},
+        # In-vocab (over n_with_k / n_with_o): for cross-paper compare with
+        # OLD klebsiella's reported numbers.
+        'k_hr_at_k_in_vocab': {k: hr_in_vocab('k_rank', 'k_in_vocab', k)
+                                for k in range(1, max_k + 1)},
+        'o_hr_at_k_in_vocab': {k: hr_in_vocab('o_rank', 'o_in_vocab', k)
+                                for k in range(1, max_k + 1)},
     }
 
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('experiment_dir')
+    # Single-experiment mode (positional)
+    p.add_argument('experiment_dir', nargs='?', default=None,
+                   help='Single-experiment mode: cipher experiment dir with model_k/ and/or model_o/. '
+                        'Omit if using --k-experiment-dir / --o-experiment-dir.')
+    # Dual-head mode
+    p.add_argument('--k-experiment-dir', default=None,
+                   help='Dual mode: experiment to source the K head from')
+    p.add_argument('--o-experiment-dir', default=None,
+                   help='Dual mode: experiment to source the O head from')
+    p.add_argument('--k-val-embedding-file', default=None,
+                   help='Dual mode: validation NPZ for K head (must match K embedding type)')
+    p.add_argument('--o-val-embedding-file', default=None,
+                   help='Dual mode: validation NPZ for O head (must match O embedding type)')
+    # Common
     p.add_argument('--datasets', nargs='+', default=None)
     p.add_argument('--val-fasta', default=None)
     p.add_argument('--val-embedding-file', default=None)
     p.add_argument('--val-embedding-file-2', default=None)
     p.add_argument('--val-datasets-dir', default=None)
     p.add_argument('--out-dir', default=None,
-                   help='Default: <experiment_dir>/results_old_style/')
+                   help='Default: <experiment_dir>/results_old_style/  (single mode); '
+                        'results/dual_head_old_style/<K>_x_<O>/  (dual mode)')
     args = p.parse_args()
 
-    if not os.path.isdir(args.experiment_dir):
-        sys.exit(f'ERROR: {args.experiment_dir} is not a directory')
-    paths = _resolve_val_paths(args.experiment_dir, args)
-    for k in ('fasta', 'emb', 'ds_dir'):
-        if not paths[k]:
-            sys.exit(f'ERROR: missing validation path {k!r}; pass via CLI '
-                     f'or put in config.yaml:validation')
+    dual_mode = bool(args.k_experiment_dir or args.o_experiment_dir)
+    if dual_mode and not (args.k_experiment_dir and args.o_experiment_dir):
+        sys.exit('ERROR: dual-head mode requires BOTH --k-experiment-dir and --o-experiment-dir')
+    if not dual_mode and not args.experiment_dir:
+        sys.exit('ERROR: provide either <experiment_dir> (single mode) '
+                 'or --k-experiment-dir + --o-experiment-dir (dual mode)')
 
-    out_dir = args.out_dir or os.path.join(args.experiment_dir, 'results_old_style')
+    # Resolve val paths from one of the experiment configs (any one works
+    # for fasta + datasets_dir; embeddings are picked separately below).
+    base_for_paths = args.experiment_dir or args.k_experiment_dir
+    paths = _resolve_val_paths(base_for_paths, args)
+    if not paths['fasta'] or not paths['ds_dir']:
+        sys.exit('ERROR: missing val_fasta or val_datasets_dir; pass via CLI '
+                 'or put in config.yaml:validation of the experiment dir')
+
+    if dual_mode:
+        if not args.k_val_embedding_file or not args.o_val_embedding_file:
+            sys.exit('ERROR: dual mode requires --k-val-embedding-file and --o-val-embedding-file')
+        k_run = os.path.basename(args.k_experiment_dir.rstrip('/'))
+        o_run = os.path.basename(args.o_experiment_dir.rstrip('/'))
+        cipher_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        cipher_root = os.path.dirname(cipher_root)  # scripts/analysis -> scripts -> cipher root
+        out_dir = args.out_dir or os.path.join(
+            cipher_root, 'results', 'dual_head_old_style', f'{k_run}_x_{o_run}')
+    else:
+        if not paths['emb']:
+            sys.exit('ERROR: missing val_embedding_file; pass via CLI or put in config.yaml:validation')
+        out_dir = args.out_dir or os.path.join(args.experiment_dir, 'results_old_style')
     os.makedirs(out_dir, exist_ok=True)
 
-    print(f'Experiment: {args.experiment_dir}')
+    print(f'Mode:       {"DUAL" if dual_mode else "SINGLE"}')
     print(f'Out dir:    {out_dir}')
-    print(f'Embeddings: {paths["emb"]}')
-    print('Loading predictor and validation data ...')
-    predictor = load_predictor(args.experiment_dir)
-    val = load_validation_data(paths['fasta'], paths['emb'], paths['ds_dir'],
-                               val_embedding_file_2=paths['emb2'])
 
-    print(f'Predictor: K classes={len(predictor.k_classes or [])}, '
-          f'O classes={len(predictor.o_classes or [])}')
+    # Build prob dicts + class lists per mode
+    if dual_mode:
+        from cipher.evaluation.dual_head_predictor import _load_source_predictor
+        from cipher.data.embeddings import load_embeddings
+        from cipher.data.proteins import load_fasta_md5
 
-    datasets = args.datasets or val['available_datasets']
+        print(f'K source:   {args.k_experiment_dir}')
+        print(f'O source:   {args.o_experiment_dir}')
+        print(f'K val NPZ:  {args.k_val_embedding_file}')
+        print(f'O val NPZ:  {args.o_val_embedding_file}')
+
+        print('Loading K source predictor ...')
+        k_pred = _load_source_predictor(args.k_experiment_dir)
+        print('Loading O source predictor ...')
+        o_pred = _load_source_predictor(args.o_experiment_dir)
+        k_classes = list(k_pred.k_classes or [])
+        o_classes = list(o_pred.o_classes or [])
+        print(f'  K classes: {len(k_classes)}, O classes: {len(o_classes)}')
+
+        print('Loading K val embeddings ...')
+        k_emb = load_embeddings(args.k_val_embedding_file)
+        print(f'  {len(k_emb)} K-side embeddings')
+        print('Loading O val embeddings ...')
+        o_emb = load_embeddings(args.o_val_embedding_file)
+        print(f'  {len(o_emb)} O-side embeddings')
+
+        pid_md5 = load_fasta_md5(paths['fasta'])
+        all_md5s_needed = sorted(set(k_emb) | set(o_emb))
+
+        print('Predicting K head over needed MD5s ...')
+        md5_to_kvec = _precompute_head_probs(k_pred, k_classes, 'k_probs', k_emb, all_md5s_needed)
+        print(f'  K probs for {len(md5_to_kvec)} MD5s')
+        print('Predicting O head over needed MD5s ...')
+        md5_to_ovec = _precompute_head_probs(o_pred, o_classes, 'o_probs', o_emb, all_md5s_needed)
+        print(f'  O probs for {len(md5_to_ovec)} MD5s')
+        n_with_both = sum(1 for m in md5_to_kvec if m in md5_to_ovec)
+        print(f'  MD5s with both K + O probs: {n_with_both}')
+
+        ds_dir_root = paths['ds_dir']
+    else:
+        print(f'Experiment: {args.experiment_dir}')
+        print(f'Embeddings: {paths["emb"]}')
+        print('Loading predictor and validation data ...')
+        predictor = load_predictor(args.experiment_dir)
+        val = load_validation_data(paths['fasta'], paths['emb'], paths['ds_dir'],
+                                   val_embedding_file_2=paths['emb2'])
+        k_classes = list(predictor.k_classes or [])
+        o_classes = list(predictor.o_classes or [])
+        print(f'Predictor: K classes={len(k_classes)}, O classes={len(o_classes)}')
+        # Collect every MD5 used by any phage in the chosen datasets — but
+        # we don't know which datasets yet, so just use every MD5 in emb_dict.
+        all_md5s_needed = sorted(set(val['emb_dict']))
+        md5_to_kvec = _precompute_head_probs(
+            predictor, k_classes, 'k_probs', val['emb_dict'], all_md5s_needed)
+        md5_to_ovec = _precompute_head_probs(
+            predictor, o_classes, 'o_probs', val['emb_dict'], all_md5s_needed)
+        pid_md5 = val['pid_md5']
+        ds_dir_root = paths['ds_dir']
+
+    # Discover available datasets (mirror runner.load_validation_data logic)
+    from cipher.evaluation.runner import DATASETS as ALL_DATASETS
+    available = [d for d in ALL_DATASETS if os.path.isdir(os.path.join(ds_dir_root, d))]
+    datasets = args.datasets or available
+
     results = {}
     for ds in datasets:
-        ds_dir = os.path.join(paths['ds_dir'], ds)
+        ds_dir = os.path.join(ds_dir_root, ds)
         if not os.path.isdir(ds_dir):
             print(f'  Skipping {ds} (not found at {ds_dir})')
             continue
         print(f'  {ds} ...', end='', flush=True)
-        r = evaluate_dataset(predictor, ds_dir, ds,
-                             val['emb_dict'], val['pid_md5'])
+        r = evaluate_dataset(ds_dir, ds, md5_to_kvec, md5_to_ovec,
+                             k_classes, o_classes, pid_md5)
         results[ds] = r
-        print(f' n={r["n_pairs"]}, '
-              f'merged HR@1={r["hr_at_k"][1]:.4f} | '
-              f'K-only HR@1={r["k_hr_at_k"][1]:.4f} '
-              f'(n={r["n_with_k"]}) | '
-              f'O-only HR@1={r["o_hr_at_k"][1]:.4f} '
-              f'(n={r["n_with_o"]})')
+        print(f' n={r["n_pairs"]} (data={r["n_with_data"]}), '
+              f'merged HR@1={r["hr_at_k"][1]:.4f}  '
+              f'K@1={r["k_hr_at_k"][1]:.4f}  '
+              f'O@1={r["o_hr_at_k"][1]:.4f}  '
+              f'OR@1={r["or_hr_at_k"][1]:.4f}')
 
-    # OVERALL: pool ranks across datasets
-    overall_merged = []
-    overall_k = []
-    overall_o = []
-    for r in results.values():
-        # We don't have raw ranks here, so reconstruct from HR curve isn't trivial.
-        # Easier: re-aggregate by dataset weight.
-        pass
-    # Compute weighted overall as per-pair sum / total
+    # OVERALL: pool by per-pair counts, weighted by n_pairs (strict).
     total = sum(r['n_pairs'] for r in results.values())
     if total > 0:
-        pooled = {}
-        for k in range(1, 21):
-            num_merged = sum(r['n_pairs'] * r['hr_at_k'][k] for r in results.values())
-            num_k = sum(r['n_with_k'] * r['k_hr_at_k'][k] for r in results.values())
-            num_o = sum(r['n_with_o'] * r['o_hr_at_k'][k] for r in results.values())
-            den_k = sum(r['n_with_k'] for r in results.values())
-            den_o = sum(r['n_with_o'] for r in results.values())
-            pooled[k] = {
-                'merged': num_merged / total,
-                'k_only': num_k / max(den_k, 1),
-                'o_only': num_o / max(den_o, 1),
-            }
+        def pool_strict(field, k):
+            return sum(r['n_pairs'] * r[field][k] for r in results.values()) / total
+
         results['OVERALL'] = {
             'n_pairs': total,
-            'n_with_k': sum(r['n_with_k'] for r in results.values() if 'n_with_k' in r),
-            'n_with_o': sum(r['n_with_o'] for r in results.values() if 'n_with_o' in r),
-            'hr_at_k': {k: pooled[k]['merged'] for k in pooled},
-            'k_hr_at_k': {k: pooled[k]['k_only'] for k in pooled},
-            'o_hr_at_k': {k: pooled[k]['o_only'] for k in pooled},
+            'n_with_data': sum(r['n_with_data'] for r in results.values()),
+            'n_with_k': sum(r['n_with_k'] for r in results.values()),
+            'n_with_o': sum(r['n_with_o'] for r in results.values()),
+            'hr_at_k': {k: pool_strict('hr_at_k', k) for k in range(1, 21)},
+            'k_hr_at_k': {k: pool_strict('k_hr_at_k', k) for k in range(1, 21)},
+            'o_hr_at_k': {k: pool_strict('o_hr_at_k', k) for k in range(1, 21)},
+            'or_hr_at_k': {k: pool_strict('or_hr_at_k', k) for k in range(1, 21)},
         }
 
     out_json = os.path.join(out_dir, 'old_style_eval.json')
@@ -353,13 +453,18 @@ def main():
         json.dump(results, f, indent=2)
 
     print()
-    print(f'{"dataset":<18} {"n":>6} {"merged@1":>10} {"merged@5":>10} '
-          f'{"K@1":>8} {"O@1":>8}')
-    print('-' * 68)
+    print(f'{"dataset":<18} {"n":>6} {"merged@1":>10} {"K@1":>8} {"O@1":>8} '
+          f'{"OR@1":>8}  {"OR@5":>8}')
+    print('-' * 78)
     for ds, r in results.items():
         print(f'{ds:<18} {r["n_pairs"]:>6} '
-              f'{r["hr_at_k"][1]:>10.4f} {r["hr_at_k"][5]:>10.4f} '
-              f'{r["k_hr_at_k"][1]:>8.4f} {r["o_hr_at_k"][1]:>8.4f}')
+              f'{r["hr_at_k"][1]:>10.4f} '
+              f'{r["k_hr_at_k"][1]:>8.4f} {r["o_hr_at_k"][1]:>8.4f} '
+              f'{r["or_hr_at_k"][1]:>8.4f}  {r["or_hr_at_k"][5]:>8.4f}')
+    print()
+    print('Strict denominator: every positive pair in scope, including pairs')
+    print('whose phage has no RBP embeddings (those count as misses).')
+    print('OR@k = ceiling under perfect K vs O merge (K-rank ≤ k OR O-rank ≤ k).')
     print(f'\nResults: {out_json}')
 
 
