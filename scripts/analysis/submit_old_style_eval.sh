@@ -122,7 +122,6 @@ declare -A EMB_TO_NPZ=(
   [kmer_murphy10_k5]=/work/hdd/bfzj/llindsey1/kmer_features/validation_murphy10_k5.npz
 )
 
-EXPS_LIST=$(printf '%q\n' ${EXPS})
 EXPS_TMP=\$(mktemp)
 cat > "\$EXPS_TMP" <<'EXPS_EOF'
 ${EXPS}
