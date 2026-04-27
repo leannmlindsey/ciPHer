@@ -63,7 +63,7 @@ from cipher.data.interactions import (
 from cipher.evaluation.runner import (
     find_predict_module, load_validation_data,
 )
-from cipher.evaluation.ranking import rank_hosts, _ranks_with_ties
+from cipher.evaluation.ranking import rank_hosts, rank_phages, _ranks_with_ties
 
 
 MAX_K = 20
@@ -111,7 +111,21 @@ def _resolve_val_paths(run_dir, cli):
 
 def evaluate_dataset_per_head(predictor, original_predict, dataset_dir,
                               emb_dict, pid_md5, max_k=MAX_K):
-    """Run all three head-modes on one dataset; return strict per-head HR@k."""
+    """Run all three head-modes on one dataset; return strict HR@k per mode.
+
+    Emits TWO HR@k families per mode:
+      - hr_at_k_any_hit: phage-level any-hit-in-top-k (headline; matches
+                         PhageHostLearn / DpoTropiSearch convention).
+                         Per phage with positives, take the BEST rank
+                         across its positive hosts; HR@k = fraction of
+                         phages whose best-positive rank ≤ k.
+      - hr_at_k_pair:    per-pair (legacy / stricter). For every (phage,
+                         positive host) pair, did that specific host
+                         land at rank ≤ k.
+    Same denominator structure for both — both over strict denom.
+    Reverse direction (rank phages given host) emitted under
+    `<mode>_phage`/`<mode>_host` only as host-level any-hit.
+    """
     pairs = load_interaction_pairs(dataset_dir)
     pm_path = os.path.join(dataset_dir, 'metadata', 'phage_protein_mapping.csv')
     phage_protein_map = load_phage_protein_mapping(pm_path)
@@ -123,72 +137,126 @@ def evaluate_dataset_per_head(predictor, original_predict, dataset_dir,
         serotypes[p['host_id']] = {'K': p['host_K'], 'O': p['host_O']}
 
     # Strict denominator: positive pairs whose phage has at least one
-    # annotated RBP (md5 present in pid_md5). No-embedding pairs are
-    # KEPT (counted as misses), not excluded.
-    strict_pairs = []
-    n_with_embedded_rbp = 0
+    # annotated RBP (md5 present in pid_md5). Pairs with annotated RBPs
+    # but no embeddings are KEPT (rank=None → miss).
+    strict_pairs = []                           # (phage, host) pair-level
+    phages_with_strict_pos = set()              # phages with ≥1 strict positive host
     for phage in sorted(interactions):
         pos_hosts = [h for h, lbl in interactions[phage].items() if lbl == 1]
         if not pos_hosts:
             continue
         proteins = phage_protein_map.get(phage, set())
-        annotated_md5s = [pid_md5.get(p) for p in proteins
-                          if p in pid_md5]
+        annotated_md5s = [pid_md5.get(p) for p in proteins if p in pid_md5]
         if not annotated_md5s:
             continue  # phage has zero annotated RBPs → out of scope
-        any_emb = any(m in emb_dict for m in annotated_md5s)
         for h in pos_hosts:
-            if h not in serotypes:
-                continue
-            strict_pairs.append((phage, h))
-            if any_emb:
-                pass
-        if any_emb:
-            n_with_embedded_rbp += sum(1 for h in pos_hosts if h in serotypes)
+            if h in serotypes:
+                strict_pairs.append((phage, h))
+                phages_with_strict_pos.add(phage)
 
-    n_strict = len(strict_pairs)
+    n_strict_pair = len(strict_pairs)
+    n_strict_phage = len(phages_with_strict_pos)
 
-    # Run each mode, collect per-pair ranks
-    mode_ranks = {m: {} for m in MODES}  # {mode: {(phage, host): rank or None}}
+    # Symmetric for reverse direction (rank phages given host)
+    host_to_phages = defaultdict(list)
+    for phage, host in strict_pairs:
+        host_to_phages[host].append(phage)
+    hosts_with_strict_pos = set(host_to_phages.keys())
+    n_strict_host = len(hosts_with_strict_pos)
+
+    # ===== Forward: rank hosts given phage =====
+    mode_pair_ranks = {m: {} for m in MODES}
+    mode_phage_anyhit = {m: {} for m in MODES}  # {mode: {phage: best_rank_or_None}}
     for mode in MODES:
         predictor.predict_protein = _mask_head(original_predict, mode)
-        per_phage_ranks = {}  # cache: phage -> {host: rank}
+        per_phage_h2r = {}
         for phage, host in strict_pairs:
-            if phage not in per_phage_ranks:
+            if phage not in per_phage_h2r:
                 proteins = phage_protein_map.get(phage, set())
                 candidates = list(interactions[phage].keys())
                 ranked = rank_hosts(predictor, proteins, candidates,
                                     serotypes, emb_dict, pid_md5)
-                if ranked:
-                    per_phage_ranks[phage] = _ranks_with_ties(
-                        ranked, tie_method='competition')
-                else:
-                    per_phage_ranks[phage] = {}
-            mode_ranks[mode][(phage, host)] = per_phage_ranks[phage].get(host)
+                per_phage_h2r[phage] = (
+                    _ranks_with_ties(ranked, tie_method='competition')
+                    if ranked else {})
+            r = per_phage_h2r[phage].get(host)
+            mode_pair_ranks[mode][(phage, host)] = r
+        # any-hit per phage (min over its strict positives)
+        for phage in phages_with_strict_pos:
+            ranks_for_phage = [
+                mode_pair_ranks[mode][(p, h)]
+                for (p, h) in strict_pairs
+                if p == phage and mode_pair_ranks[mode].get((p, h)) is not None
+            ]
+            mode_phage_anyhit[mode][phage] = (min(ranks_for_phage)
+                                              if ranks_for_phage else None)
 
-    # Compute strict HR@k per mode + OR ceiling
+    # ===== Reverse: rank phages given host =====
+    mode_host_anyhit = {m: {} for m in MODES}
+    # Build phage-protein-map and serotypes already loaded.
+    for mode in MODES:
+        predictor.predict_protein = _mask_head(original_predict, mode)
+        for host in hosts_with_strict_pos:
+            pos_phages_for_host = host_to_phages[host]
+            # Candidate set: all phages that have any interaction record
+            # with this host (not just positives — symmetric to rank_hosts).
+            candidates = [phage for phage in interactions
+                          if host in interactions[phage]]
+            ranked = rank_phages(predictor, host, candidates,
+                                 phage_protein_map, serotypes,
+                                 emb_dict, pid_md5)
+            if not ranked:
+                mode_host_anyhit[mode][host] = None
+                continue
+            phage_to_rank = _ranks_with_ties(ranked, tie_method='competition')
+            ranks = [phage_to_rank[p] for p in pos_phages_for_host
+                     if p in phage_to_rank]
+            mode_host_anyhit[mode][host] = min(ranks) if ranks else None
+
+    # Compute HR@k per mode (any-hit + per-pair) + OR ceilings
+    def _hr_pair(mode, k):
+        return sum(1 for r in mode_pair_ranks[mode].values()
+                   if r is not None and r <= k) / max(n_strict_pair, 1)
+    def _hr_phage_anyhit(mode, k):
+        return sum(1 for r in mode_phage_anyhit[mode].values()
+                   if r is not None and r <= k) / max(n_strict_phage, 1)
+    def _hr_host_anyhit(mode, k):
+        return sum(1 for r in mode_host_anyhit[mode].values()
+                   if r is not None and r <= k) / max(n_strict_host, 1)
+    def _hr_or_pair(k):
+        return sum(1 for pair in mode_pair_ranks['k_only']
+                   if (mode_pair_ranks['k_only'].get(pair) is not None
+                       and mode_pair_ranks['k_only'][pair] <= k)
+                   or (mode_pair_ranks['o_only'].get(pair) is not None
+                       and mode_pair_ranks['o_only'][pair] <= k)
+                   ) / max(n_strict_pair, 1)
+    def _hr_or_phage_anyhit(k):
+        return sum(1 for phage in phages_with_strict_pos
+                   if (mode_phage_anyhit['k_only'].get(phage) is not None
+                       and mode_phage_anyhit['k_only'][phage] <= k)
+                   or (mode_phage_anyhit['o_only'].get(phage) is not None
+                       and mode_phage_anyhit['o_only'][phage] <= k)
+                   ) / max(n_strict_phage, 1)
+
     out = {
-        'n_strict': n_strict,
-        'n_with_embedded_rbp': n_with_embedded_rbp,
+        'n_strict_pair': n_strict_pair,
+        'n_strict_phage': n_strict_phage,
+        'n_strict_host': n_strict_host,
+        # legacy alias for backward-compat with old harvest code:
+        'n_strict': n_strict_pair,
     }
     for mode in MODES:
         out[mode] = {
-            'hr_at_k': {
-                k: sum(1 for r in mode_ranks[mode].values()
-                       if r is not None and r <= k) / max(n_strict, 1)
-                for k in range(1, max_k + 1)
-            }
+            'hr_at_k_any_hit':       {k: _hr_phage_anyhit(mode, k) for k in range(1, max_k + 1)},
+            'hr_at_k_pair':          {k: _hr_pair(mode, k) for k in range(1, max_k + 1)},
+            'hr_at_k_phage_any_hit': {k: _hr_host_anyhit(mode, k) for k in range(1, max_k + 1)},
+            # alias for backward-compat
+            'hr_at_k': {k: _hr_pair(mode, k) for k in range(1, max_k + 1)},
         }
-    # OR: K_rank ≤ k OR O_rank ≤ k
     out['or'] = {
-        'hr_at_k': {
-            k: sum(1 for pair in mode_ranks['k_only']
-                   if (mode_ranks['k_only'].get(pair) is not None
-                       and mode_ranks['k_only'][pair] <= k)
-                   or (mode_ranks['o_only'].get(pair) is not None
-                       and mode_ranks['o_only'][pair] <= k)) / max(n_strict, 1)
-            for k in range(1, max_k + 1)
-        }
+        'hr_at_k_any_hit': {k: _hr_or_phage_anyhit(k) for k in range(1, max_k + 1)},
+        'hr_at_k_pair':    {k: _hr_or_pair(k) for k in range(1, max_k + 1)},
+        'hr_at_k':         {k: _hr_or_pair(k) for k in range(1, max_k + 1)},
     }
     return out
 
@@ -238,20 +306,36 @@ def main():
             predictor, original_predict, ds_dir,
             val['emb_dict'], val['pid_md5'])
         out[ds]['dataset'] = ds
-        # Add a 'best_strict' field per dataset = max(K@1, O@1, merged@1)
-        best = max(
-            out[ds]['k_only']['hr_at_k'][1],
-            out[ds]['o_only']['hr_at_k'][1],
-            out[ds]['merged']['hr_at_k'][1])
-        out[ds]['best_strict_HR1'] = best
-        out[ds]['or_HR1'] = out[ds]['or']['hr_at_k'][1]
-        n = out[ds]['n_strict']
-        print(f' n_strict={n}, '
-              f'K@1={out[ds]["k_only"]["hr_at_k"][1]:.3f}  '
-              f'O@1={out[ds]["o_only"]["hr_at_k"][1]:.3f}  '
-              f'merged@1={out[ds]["merged"]["hr_at_k"][1]:.3f}  '
-              f'OR@1={out[ds]["or"]["hr_at_k"][1]:.3f}  '
-              f'best={best:.3f}')
+        # Headline (any-hit, phage-level) — best over the three head-modes.
+        best_any = max(
+            out[ds]['k_only']['hr_at_k_any_hit'][1],
+            out[ds]['o_only']['hr_at_k_any_hit'][1],
+            out[ds]['merged']['hr_at_k_any_hit'][1])
+        out[ds]['best_anyhit_HR1'] = best_any
+        out[ds]['or_anyhit_HR1'] = out[ds]['or']['hr_at_k_any_hit'][1]
+        # Legacy per-pair (kept for backward-compat with old plots):
+        best_pair = max(
+            out[ds]['k_only']['hr_at_k_pair'][1],
+            out[ds]['o_only']['hr_at_k_pair'][1],
+            out[ds]['merged']['hr_at_k_pair'][1])
+        out[ds]['best_strict_HR1'] = best_pair
+        out[ds]['or_HR1'] = out[ds]['or']['hr_at_k_pair'][1]
+
+        n_phage = out[ds]['n_strict_phage']
+        n_pair = out[ds]['n_strict_pair']
+        print(f' n_phage={n_phage} n_pair={n_pair}')
+        print(f'    any-hit (PHL-style headline): '
+              f'K@1={out[ds]["k_only"]["hr_at_k_any_hit"][1]:.3f}  '
+              f'O@1={out[ds]["o_only"]["hr_at_k_any_hit"][1]:.3f}  '
+              f'merged@1={out[ds]["merged"]["hr_at_k_any_hit"][1]:.3f}  '
+              f'OR@1={out[ds]["or"]["hr_at_k_any_hit"][1]:.3f}  '
+              f'best={best_any:.3f}')
+        print(f'    per-pair (legacy):           '
+              f'K@1={out[ds]["k_only"]["hr_at_k_pair"][1]:.3f}  '
+              f'O@1={out[ds]["o_only"]["hr_at_k_pair"][1]:.3f}  '
+              f'merged@1={out[ds]["merged"]["hr_at_k_pair"][1]:.3f}  '
+              f'OR@1={out[ds]["or"]["hr_at_k_pair"][1]:.3f}  '
+              f'best={best_pair:.3f}')
 
     predictor.predict_protein = original_predict  # restore
 

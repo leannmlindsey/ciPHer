@@ -163,7 +163,12 @@ def evaluate_rankings(predictor, dataset_name, dataset_dir,
     all_hosts = sorted(serotypes.keys())
 
     # ── Rank hosts given phage ──
+    # Two metrics:
+    #   `rank_hosts_ranks` — per (phage, positive host) pair (legacy).
+    #   `phage_anyhit_ranks` — per phage with positives, the BEST rank
+    #     among its positive hosts (PhageHostLearn-style "any-hit-in-top-k").
     rank_hosts_ranks = []
+    phage_anyhit_ranks = []
     for phage in all_phages:
         pos_hosts = [h for h, label in interactions[phage].items() if label == 1]
         candidates = list(interactions[phage].keys())
@@ -177,17 +182,24 @@ def evaluate_rankings(predictor, dataset_name, dataset_dir,
             continue
 
         host_to_rank = _ranks_with_ties(ranked, tie_method=tie_method)
+        per_phage_ranks = []
         for pos_h in pos_hosts:
             if pos_h in host_to_rank:
                 rank_hosts_ranks.append(host_to_rank[pos_h])
+                per_phage_ranks.append(host_to_rank[pos_h])
+        if per_phage_ranks:
+            phage_anyhit_ranks.append(min(per_phage_ranks))
 
     # ── Rank phages given host ──
+    # Symmetric: `host_anyhit_ranks` = per host with positives, best
+    # rank among its positive phages.
     host_interactions = defaultdict(dict)
     for phage in interactions:
         for host, label in interactions[phage].items():
             host_interactions[host][phage] = label
 
     rank_phages_ranks = []
+    host_anyhit_ranks = []
     for host in sorted(host_interactions.keys()):
         pos_phages = [ph for ph, label in host_interactions[host].items()
                       if label == 1]
@@ -201,23 +213,35 @@ def evaluate_rankings(predictor, dataset_name, dataset_dir,
             continue
 
         phage_to_rank = _ranks_with_ties(ranked, tie_method=tie_method)
+        per_host_ranks = []
         for pos_ph in pos_phages:
             if pos_ph in phage_to_rank:
                 rank_phages_ranks.append(phage_to_rank[pos_ph])
+                per_host_ranks.append(phage_to_rank[pos_ph])
+        if per_host_ranks:
+            host_anyhit_ranks.append(min(per_host_ranks))
 
     return {
         'rank_hosts': {
+            # legacy per-pair counts
             'n_pairs': len(rank_hosts_ranks),
+            'hr_at_k': hr_curve(rank_hosts_ranks, max_k),       # per-pair (legacy)
+            'mrr': mrr(rank_hosts_ranks),
+            # new: phage-level any-hit (PHL-style headline)
+            'n_phages_with_pos': len(phage_anyhit_ranks),
+            'hr_at_k_any_hit': hr_curve(phage_anyhit_ranks, max_k),
+            'mrr_any_hit': mrr(phage_anyhit_ranks),
             'n_phages': len(all_phages),
             'n_hosts': len(all_hosts),
-            'hr_at_k': hr_curve(rank_hosts_ranks, max_k),
-            'mrr': mrr(rank_hosts_ranks),
         },
         'rank_phages': {
             'n_pairs': len(rank_phages_ranks),
-            'n_phages': len(all_phages),
-            'n_hosts': len(all_hosts),
             'hr_at_k': hr_curve(rank_phages_ranks, max_k),
             'mrr': mrr(rank_phages_ranks),
+            'n_hosts_with_pos': len(host_anyhit_ranks),
+            'hr_at_k_any_hit': hr_curve(host_anyhit_ranks, max_k),
+            'mrr_any_hit': mrr(host_anyhit_ranks),
+            'n_phages': len(all_phages),
+            'n_hosts': len(all_hosts),
         },
     }
