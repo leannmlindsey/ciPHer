@@ -184,11 +184,11 @@ def plot_grid(rows, datasets, direction, out_path, title, include_or=False):
         return
 
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='lower center',
-               ncol=max(1, min(2, len(labels))),
+    # Single-column legend so its width never exceeds the longest label.
+    fig.legend(handles, labels, loc='lower center', ncol=1,
                bbox_to_anchor=(0.5, -0.02),
-               fontsize=9, title='Run (sorted by best PHL+PBIP any-hit)',
-               title_fontsize=9)
+               fontsize=8, title='Top runs (sorted by overall HR@1, phage-weighted)',
+               title_fontsize=9, frameon=True, framealpha=0.95)
     fig.suptitle(title, fontsize=12, fontweight='bold', y=1.00)
     fig.tight_layout(rect=[0, 0.06, 1, 0.97])
     fig.savefig(out_path, format='svg', bbox_inches='tight')

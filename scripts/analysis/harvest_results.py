@@ -106,6 +106,8 @@ def extract_row(exp_dir, source_label=''):
 
     # Per-dataset metrics — cipher's NEW eval (host-rank/phage-rank, merged,
     # over the lenient denominator that cipher's runner uses by default).
+    # n_pairs per direction is captured so legacy composites can be
+    # phage-weighted (consistent with the strict-denom overall_*).
     for ds in DATASETS:
         r = ev.get(ds, {})
         rh = r.get('rank_hosts', {}).get('hr_at_k', {})
@@ -115,6 +117,8 @@ def extract_row(exp_dir, source_label=''):
             row[f'{ds}_rp{k}'] = rp.get(str(k), '')
         row[f'{ds}_rh_mrr'] = r.get('rank_hosts', {}).get('mrr', '')
         row[f'{ds}_rp_mrr'] = r.get('rank_phages', {}).get('mrr', '')
+        row[f'{ds}_rh_n'] = r.get('rank_hosts', {}).get('n_pairs', '')
+        row[f'{ds}_rp_n'] = r.get('rank_phages', {}).get('n_pairs', '')
 
     # Per-head strict-denominator HR@k from results/per_head_strict_eval.json.
     # We emit the FULL k=1..20 curve for the headline metric (best-of-three
@@ -194,22 +198,25 @@ def extract_row(exp_dir, source_label=''):
         row[f'{ds}_n_strict_host'] = d.get('n_strict_host', '')
         row[f'{ds}_n_strict'] = d.get('n_strict_pair', d.get('n_strict', ''))
 
-    # Derived scores
-    phl_pbip_vals = [
-        _num(row['PhageHostLearn_rh1']), _num(row['PhageHostLearn_rp1']),
-        _num(row['PBIP_rh1']), _num(row['PBIP_rp1']),
-    ]
-    if all(v is not None for v in phl_pbip_vals):
-        row['phl_pbip_combined_hr1'] = sum(phl_pbip_vals) / 4
-    else:
-        row['phl_pbip_combined_hr1'] = ''
+    # Derived NEW-eval composites (cold-start fallback for SLURM wrappers
+    # before per_head_strict_eval has run). Now phage/host-weighted —
+    # consistent with overall_anyhit_HR1 going forward.
+    def _weighted_neweval(datasets, directions):
+        num, den = 0.0, 0
+        for ds in datasets:
+            for d in directions:
+                rate = _num(row.get(f'{ds}_{d}1'))
+                n = _num(row.get(f'{ds}_{d}_n'))
+                if rate is not None and n is not None and n > 0:
+                    num += rate * n
+                    den += int(n)
+        return (num / den) if den > 0 else None
 
-    all_hr1 = [_num(row[f'{ds}_rh1']) for ds in DATASETS] + \
-              [_num(row[f'{ds}_rp1']) for ds in DATASETS]
-    if all(v is not None for v in all_hr1):
-        row['five_ds_mean_hr1'] = sum(all_hr1) / len(all_hr1)
-    else:
-        row['five_ds_mean_hr1'] = ''
+    phl_pbip = _weighted_neweval(['PhageHostLearn', 'PBIP'], ('rh', 'rp'))
+    row['phl_pbip_combined_hr1'] = phl_pbip if phl_pbip is not None else ''
+
+    five_ds = _weighted_neweval(DATASETS, ('rh', 'rp'))
+    row['five_ds_mean_hr1'] = five_ds if five_ds is not None else ''
 
     # Composites — phage-weighted across ALL 5 datasets (treat each
     # phage equally, regardless of dataset size). Dataset-mean averaging

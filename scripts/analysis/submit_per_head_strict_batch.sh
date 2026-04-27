@@ -47,8 +47,13 @@ def f(v):
     try: return float(v)
     except: return None
 with open(csv_path) as fh:
-    rows = [r for r in csv.DictReader(fh) if f(r.get("phl_pbip_combined_hr1")) is not None]
-rows.sort(key=lambda r: -f(r["phl_pbip_combined_hr1"]))
+    all_rows = list(csv.DictReader(fh))
+# Prefer phage-weighted overall; fall back to legacy combined only on a
+# cold-start (no per_head_strict_eval has been run for any exp yet).
+have_overall = any(f(r.get("overall_anyhit_HR1")) is not None for r in all_rows)
+field = "overall_anyhit_HR1" if have_overall else "phl_pbip_combined_hr1"
+rows = [r for r in all_rows if f(r.get(field)) is not None]
+rows.sort(key=lambda r: -f(r[field]))
 for r in rows[:${N_TOP}]:
     print(r["exp_dir"])
 PYEOF
