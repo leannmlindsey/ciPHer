@@ -211,33 +211,67 @@ def extract_row(exp_dir, source_label=''):
     else:
         row['five_ds_mean_hr1'] = ''
 
-    # Strict-denominator composites (only computable when per-head JSON exists)
-    # any-hit family — primary leaderboard metric
-    phl_any = _num(row.get('PhageHostLearn_best_anyhit_HR1'))
-    pbip_any = _num(row.get('PBIP_best_anyhit_HR1'))
-    if phl_any is not None and pbip_any is not None:
-        row['phl_pbip_best_anyhit_HR1'] = (phl_any + pbip_any) / 2
-    else:
-        row['phl_pbip_best_anyhit_HR1'] = ''
+    # Composites — phage-weighted across ALL 5 datasets (treat each
+    # phage equally, regardless of dataset size). Dataset-mean averaging
+    # was misleading because GORODNICHIV (n=12, trivially solved) carried
+    # the same weight as PhageHostLearn (n≈99) or PBIP (n≈101).
+    #
+    # Weighted overall HR@k = Σ(rate_d × n_d) / Σ(n_d)
+    def _weighted_overall_HR1(rate_field, n_field):
+        num, den = 0.0, 0
+        for ds in DATASETS:
+            rate = _num(row.get(f'{ds}_{rate_field}'))
+            n = _num(row.get(f'{ds}_{n_field}'))
+            if rate is not None and n is not None and n > 0:
+                num += rate * n
+                den += int(n)
+        return (num / den) if den > 0 else None
 
-    phl_or_any = _num(row.get('PhageHostLearn_OR_anyhit_HR1'))
-    pbip_or_any = _num(row.get('PBIP_OR_anyhit_HR1'))
-    if phl_or_any is not None and pbip_or_any is not None:
-        row['phl_pbip_OR_anyhit_HR1'] = (phl_or_any + pbip_or_any) / 2
-    else:
-        row['phl_pbip_OR_anyhit_HR1'] = ''
+    def _weighted_overall_curve(curve_prefix, n_field):
+        """Return list of 20 weighted HR@k values, k=1..20."""
+        out = []
+        for k in range(1, 21):
+            num, den = 0.0, 0
+            for ds in DATASETS:
+                rate = _num(row.get(f'{ds}_{curve_prefix}{k}'))
+                n = _num(row.get(f'{ds}_{n_field}'))
+                if rate is not None and n is not None and n > 0:
+                    num += rate * n
+                    den += int(n)
+            out.append((num / den) if den > 0 else None)
+        return out
 
-    # Backward-compat alias: phl_pbip_best_strict_HR1 now means any-hit too.
-    row['phl_pbip_best_strict_HR1'] = row['phl_pbip_best_anyhit_HR1']
-    row['phl_pbip_OR_strict_HR1'] = row['phl_pbip_OR_anyhit_HR1']
+    # phage→host direction (cipher primary use case): weighted by phages-with-pos
+    overall_p2h = _weighted_overall_HR1('best_anyhit_HR1', 'n_strict_phage')
+    row['overall_anyhit_HR1'] = overall_p2h if overall_p2h is not None else ''
+    p2h_curve = _weighted_overall_curve('best_phage2host_anyhit_HR', 'n_strict_phage')
+    for k, v in zip(range(1, 21), p2h_curve):
+        row[f'overall_phage2host_anyhit_HR{k}'] = (v if v is not None else '')
 
-    # per-pair composite (legacy)
-    phl_pair = _num(row.get('PhageHostLearn_best_pair_HR1'))
-    pbip_pair = _num(row.get('PBIP_best_pair_HR1'))
-    if phl_pair is not None and pbip_pair is not None:
-        row['phl_pbip_best_pair_HR1'] = (phl_pair + pbip_pair) / 2
-    else:
-        row['phl_pbip_best_pair_HR1'] = ''
+    # host→phage direction (PHL-tool comparison): weighted by hosts-with-pos
+    h2p_curve = _weighted_overall_curve('best_host2phage_anyhit_HR', 'n_strict_host')
+    for k, v in zip(range(1, 21), h2p_curve):
+        row[f'overall_host2phage_anyhit_HR{k}'] = (v if v is not None else '')
+    row['overall_host2phage_anyhit_HR1'] = (
+        h2p_curve[0] if h2p_curve and h2p_curve[0] is not None else '')
+
+    # OR ceiling (phage→host direction)
+    or_curve = _weighted_overall_curve('OR_phage2host_anyhit_HR', 'n_strict_phage')
+    for k, v in zip(range(1, 21), or_curve):
+        row[f'overall_OR_anyhit_HR{k}'] = (v if v is not None else '')
+    row['overall_OR_anyhit_HR1'] = (
+        or_curve[0] if or_curve and or_curve[0] is not None else '')
+
+    # Per-pair composite (legacy, weighted)
+    overall_pair = _weighted_overall_HR1('best_pair_HR1', 'n_strict_pair')
+    row['overall_best_pair_HR1'] = overall_pair if overall_pair is not None else ''
+
+    # Backward-compat aliases (point at the new overall composite)
+    row['phl_pbip_best_anyhit_HR1'] = row['overall_anyhit_HR1']
+    row['phl_pbip_OR_anyhit_HR1'] = row['overall_OR_anyhit_HR1']
+    row['phl_pbip_best_strict_HR1'] = row['overall_anyhit_HR1']
+    row['phl_pbip_OR_strict_HR1'] = row['overall_OR_anyhit_HR1']
+    row['phl_pbip_best_pair_HR1'] = row['overall_best_pair_HR1']
 
     return row
 
@@ -288,12 +322,13 @@ def main():
         print('No evaluated experiments found in any supplied root.')
         return
 
-    # Sort priority: any-hit best-head composite > legacy combined.
-    have_anyhit = any(isinstance(r.get('phl_pbip_best_anyhit_HR1'), (int, float))
-                      for r in all_rows)
-    sort_field = ('phl_pbip_best_anyhit_HR1' if have_anyhit
+    # Sort priority: weighted overall any-hit > legacy combined.
+    have_overall = any(isinstance(r.get('overall_anyhit_HR1'), (int, float))
+                       for r in all_rows)
+    sort_field = ('overall_anyhit_HR1' if have_overall
                   else 'phl_pbip_combined_hr1')
-    print(f'Sorting by: {sort_field}')
+    print(f'Sorting by: {sort_field}  '
+          '(phage-weighted overall across 5 datasets)')
 
     def sort_key(r):
         v = r.get(sort_field, '')

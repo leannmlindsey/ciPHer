@@ -32,7 +32,16 @@ import matplotlib.pyplot as plt
 
 PRIMARY = ['PhageHostLearn', 'PBIP']
 ALL_DS = ['CHEN', 'GORODNICHIV', 'UCSD', 'PBIP', 'PhageHostLearn']
+ALL_DS_WITH_OVERALL = ALL_DS + ['OVERALL']
+PRIMARY_WITH_OVERALL = PRIMARY + ['OVERALL']
 MAX_K = 20
+
+MODEL_TAGS = {
+    'attention_mlp':           'mlp',
+    'light_attention':         'la',
+    'light_attention_binary':  'lab',
+    'contrastive_encoder':     'contr',
+}
 
 FAMILY_CMAPS = {
     'prott5_mean': 'Greens', 'prott5_xl_full': 'BuGn',
@@ -54,10 +63,11 @@ def fnum(v):
 
 
 def top_n_anyhit(n, harvest_csv='results/experiment_log.csv'):
+    """Top N by weighted overall any-hit across all 5 datasets."""
     with open(harvest_csv) as f:
         rows = [r for r in csv.DictReader(f)
-                if fnum(r.get('phl_pbip_best_anyhit_HR1')) is not None]
-    rows.sort(key=lambda r: -fnum(r['phl_pbip_best_anyhit_HR1']))
+                if fnum(r.get('overall_anyhit_HR1')) is not None]
+    rows.sort(key=lambda r: -fnum(r['overall_anyhit_HR1']))
     return rows[:n]
 
 
@@ -77,13 +87,15 @@ def assign_colors(rows, label_key='embedding_type'):
     return out
 
 
-def get_curve(row, dataset, direction, include_or=False):
-    """Return list of (k, hr@k) from harvest row.
+def get_curve(row, dataset, direction):
+    """HR@k curve for a single dataset (or 'overall' for the weighted composite).
 
     direction: 'phage2host' or 'host2phage'.
-    Returns: [(k, value), ...] for k=1..20 where value is non-empty.
     """
-    field = f'{dataset}_best_{direction}_anyhit_HR'
+    if dataset == 'OVERALL':
+        field = f'overall_{direction}_anyhit_HR'
+    else:
+        field = f'{dataset}_best_{direction}_anyhit_HR'
     out = []
     for k in range(1, MAX_K + 1):
         v = fnum(row.get(f'{field}{k}'))
@@ -93,12 +105,39 @@ def get_curve(row, dataset, direction, include_or=False):
 
 
 def get_or_curve(row, dataset):
+    if dataset == 'OVERALL':
+        prefix = 'overall_OR_anyhit_HR'
+    else:
+        prefix = f'{dataset}_OR_phage2host_anyhit_HR'
     out = []
     for k in range(1, MAX_K + 1):
-        v = fnum(row.get(f'{dataset}_OR_phage2host_anyhit_HR{k}'))
+        v = fnum(row.get(f'{prefix}{k}'))
         if v is not None:
             out.append((k, v))
     return out
+
+
+def panel_n(row, dataset, direction):
+    """Phage / host count for a panel."""
+    if dataset == 'OVERALL':
+        # Sum the per-dataset counts
+        n_field = ('n_strict_phage' if direction == 'phage2host'
+                   else 'n_strict_host')
+        total = 0
+        for ds in ALL_DS:
+            v = fnum(row.get(f'{ds}_{n_field}'))
+            if v is not None:
+                total += int(v)
+        return total
+    n_field = (f'{dataset}_n_strict_phage' if direction == 'phage2host'
+               else f'{dataset}_n_strict_host')
+    return row.get(n_field, '?')
+
+
+def _label(row):
+    """Plot legend label: '[arch_tag] run_name'."""
+    tag = MODEL_TAGS.get(row.get('model', ''), row.get('model', '?'))
+    return f"[{tag}] {row['run_name']}"
 
 
 def plot_grid(rows, datasets, direction, out_path, title, include_or=False):
@@ -115,7 +154,7 @@ def plot_grid(rows, datasets, direction, out_path, title, include_or=False):
             if not curve:
                 continue
             ks, ys = zip(*curve)
-            ax.plot(ks, ys, label=r['run_name'],
+            ax.plot(ks, ys, label=_label(r),
                     color=colors[r['run_name']], lw=1.8, alpha=0.95)
             plotted_any = True
         if include_or:
@@ -125,12 +164,12 @@ def plot_grid(rows, datasets, direction, out_path, title, include_or=False):
                 if curve:
                     ks, ys = zip(*curve)
                     ax.plot(ks, ys, color='#999', lw=1.5, ls='--',
-                            label=f'OR ceiling ({r["run_name"][:30]})',
+                            label=f'OR ceiling ({_label(r)})',
                             alpha=0.7)
-        # n label: pull from row.<DS>_n_strict_{phage,host}
-        n_field = f'{ds}_n_strict_phage' if direction == 'phage2host' else f'{ds}_n_strict_host'
-        n = rows[0].get(n_field, '?') if rows else '?'
-        ax.set_title(f'{ds}  (n={n})', fontsize=11)
+        n = panel_n(rows[0], ds, direction) if rows else '?'
+        title_label = ds if ds != 'OVERALL' else 'OVERALL (weighted)'
+        ax.set_title(f'{title_label}  (n={n})', fontsize=11,
+                     fontweight='bold' if ds == 'OVERALL' else 'normal')
         ax.set_xlabel('k')
         ax.set_ylabel('HR@k (any-hit, strict)')
         ax.set_xlim(0.5, MAX_K + 0.5)
@@ -173,13 +212,15 @@ def main():
               'per_head_strict_eval batch finishes.')
         return
 
-    print(f'Top {args.top} by phl_pbip_best_anyhit_HR1:')
+    print(f'Top {args.top} by overall_anyhit_HR1 (phage-weighted across 5 datasets):')
     for r in rows:
-        print(f'  {r["run_name"]:<55} '
-              f'best_anyhit={fnum(r["phl_pbip_best_anyhit_HR1"]):.3f} '
+        tag = MODEL_TAGS.get(r.get('model', ''), r.get('model', '?'))
+        print(f'  [{tag:<5}] {r["run_name"]:<55} '
+              f'overall={fnum(r["overall_anyhit_HR1"]):.3f}  '
               f'[{r.get("embedding_type", "?")}]')
 
-    datasets = PRIMARY if args.datasets == 'primary' else ALL_DS
+    datasets = (PRIMARY_WITH_OVERALL if args.datasets == 'primary'
+                else ALL_DS_WITH_OVERALL)
     suffix = f'_top{args.top}'
     if args.datasets == 'all':
         suffix += '_all5'
