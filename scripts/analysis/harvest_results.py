@@ -104,7 +104,8 @@ def extract_row(exp_dir, source_label=''):
         'n_o_classes': exp.get('n_o_classes', ''),
     }
 
-    # Per-dataset metrics
+    # Per-dataset metrics — cipher's NEW eval (host-rank/phage-rank, merged,
+    # over the lenient denominator that cipher's runner uses by default).
     for ds in DATASETS:
         r = ev.get(ds, {})
         rh = r.get('rank_hosts', {}).get('hr_at_k', {})
@@ -114,6 +115,23 @@ def extract_row(exp_dir, source_label=''):
             row[f'{ds}_rp{k}'] = rp.get(str(k), '')
         row[f'{ds}_rh_mrr'] = r.get('rank_hosts', {}).get('mrr', '')
         row[f'{ds}_rp_mrr'] = r.get('rank_phages', {}).get('mrr', '')
+
+    # Per-head host-ranking under STRICT denominator from
+    # results/per_head_strict_eval.json. Emits K-only / O-only / merged /
+    # OR-ceiling HR@1 plus a `<DS>_best_strict_HR1 = max(K, O, merged)`
+    # so the leaderboard can rank by each model's best honest number,
+    # not whatever the broken merge happens to produce.
+    ph = _safe_load(os.path.join(exp_dir, 'results', 'per_head_strict_eval.json'))
+    for ds in DATASETS:
+        d = ph.get(ds, {})
+        for mode_key, col_key in (('k_only', 'K'), ('o_only', 'O'),
+                                    ('merged', 'merged'), ('or', 'OR')):
+            v = d.get(mode_key, {}).get('hr_at_k', {}).get('1')
+            if v is None:
+                v = d.get(mode_key, {}).get('hr_at_k', {}).get(1, '')
+            row[f'{ds}_{col_key}_strict_HR1'] = v if v != '' else ''
+        row[f'{ds}_best_strict_HR1'] = d.get('best_strict_HR1', '')
+        row[f'{ds}_n_strict'] = d.get('n_strict', '')
 
     # Derived scores
     phl_pbip_vals = [
@@ -131,6 +149,21 @@ def extract_row(exp_dir, source_label=''):
         row['five_ds_mean_hr1'] = sum(all_hr1) / len(all_hr1)
     else:
         row['five_ds_mean_hr1'] = ''
+
+    # Strict-denominator composites (only computable when per-head JSON exists)
+    phl_best = _num(row.get('PhageHostLearn_best_strict_HR1'))
+    pbip_best = _num(row.get('PBIP_best_strict_HR1'))
+    if phl_best is not None and pbip_best is not None:
+        row['phl_pbip_best_strict_HR1'] = (phl_best + pbip_best) / 2
+    else:
+        row['phl_pbip_best_strict_HR1'] = ''
+
+    phl_or = _num(row.get('PhageHostLearn_OR_strict_HR1'))
+    pbip_or = _num(row.get('PBIP_OR_strict_HR1'))
+    if phl_or is not None and pbip_or is not None:
+        row['phl_pbip_OR_strict_HR1'] = (phl_or + pbip_or) / 2
+    else:
+        row['phl_pbip_OR_strict_HR1'] = ''
 
     return row
 
@@ -181,8 +214,16 @@ def main():
         print('No evaluated experiments found in any supplied root.')
         return
 
+    # Sort: prefer the strict-denominator best-head composite if present
+    # for any row, else fall back to legacy phl_pbip_combined_hr1.
+    have_strict = any(isinstance(r.get('phl_pbip_best_strict_HR1'), (int, float))
+                      for r in all_rows)
+    sort_field = ('phl_pbip_best_strict_HR1' if have_strict
+                  else 'phl_pbip_combined_hr1')
+    print(f'Sorting by: {sort_field}')
+
     def sort_key(r):
-        v = r.get('phl_pbip_combined_hr1', '')
+        v = r.get(sort_field, '')
         return -v if isinstance(v, (int, float)) else 1.0
     all_rows.sort(key=sort_key)
 
