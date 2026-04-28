@@ -39,9 +39,14 @@ OUT_TSV = 'results/analysis/cipher_vs_tropi_per_phage.tsv'
 
 
 def load_cipher_tsv(path):
+    """Tolerant loader: sniff comma vs tab from the header line."""
+    with open(path) as fh:
+        first = fh.readline()
+    delim = ',' if first.count(',') > first.count('\t') else '\t'
     out = {}
-    for r in csv.DictReader(open(path), delimiter='\t'):
-        out[(r['dataset'], r['phage_id'])] = r
+    with open(path) as fh:
+        for r in csv.DictReader(fh, delimiter=delim):
+            out[(r['dataset'], r['phage_id'])] = r
     return out
 
 
@@ -74,16 +79,20 @@ def main():
     print(f'Tropi  TSV phages: {len(tropi)}')
     print(f'Joined (intersect): {len(common_keys)}')
 
-    # Joined per-phage table
+    # Joined per-phage table.
+    # Cipher cp_top1 column: prefer `cp_top1_host_K` (rank-1 host's K-type
+    # from rank_hosts — apples-to-apples with Tropi), fall back to
+    # `cp_top1_set` (raw modal K class — legacy / less accurate).
     joined_rows = []
     for k in common_keys:
         cp = cipher[k]
         tp = tropi[k]
+        cp_top1 = cp.get('cp_top1_host_K') or cp.get('cp_top1_set', '')
         joined_rows.append({
             'dataset': k[0],
             'phage_id': k[1],
             'positive_K_types': cp['positive_K_types'],
-            'cp_top1': cp['cp_top1_set'],
+            'cp_top1': cp_top1,
             'cp_hit@1': cp['cp_hit@1'],
             'ts_top1': tp['ts_top1_set'],
             'ts_hit@1': tp['ts_hit@1'],
