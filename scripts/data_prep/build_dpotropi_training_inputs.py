@@ -163,18 +163,19 @@ def main():
         for m, d in proteins.items():
             f.write(f'>{d["protein_id"]}\n{d["seq"]}\n')
 
-    # Write phage_protein_map (one row per (protein, KL) — cipher's
-    # prepare_training_data unions multi-rows). Match cipher's column
-    # names exactly.
+    # Write phage_protein_map. Cipher's load_training_map expects:
+    #   host_assembly, host_K, host_O, phage_id, protein_id, is_tsp,
+    #   protein_md5
+    # One row per (protein, KL) — multi-KL proteins emit multiple rows.
     print(f'Writing {out_map}')
     with open(out_map, 'w', newline='') as f:
         w = csv.writer(f, delimiter='\t')
-        w.writerow(['host_genome', 'K_type', 'O_type', 'phage_genome',
-                    'protein_id', 'is_tsp', 'md5', 'matrix_phage_name'])
+        w.writerow(['host_assembly', 'host_K', 'host_O', 'phage_id',
+                    'protein_id', 'is_tsp', 'protein_md5'])
         for m, d in proteins.items():
             for kl in sorted(d['kls']):
                 w.writerow([d['host'], kl, '', d['phage'],
-                            d['protein_id'], 0, m, d['phage']])
+                            d['protein_id'], 0, m])
 
     # Write glycan_binders (all 8 tool flags = 1, total_sources = 8 — we
     # don't have tool info from DpoTropi, so treat all as positives).

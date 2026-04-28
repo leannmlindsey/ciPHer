@@ -142,7 +142,7 @@ fi
 if [ "$STEP" = "all" ] || [ "$STEP" = "3" ]; then
 DEP="${JOB1_ID:-}"
 DEP_FLAG=""
-if [ -n "$DEP" ] && [ "$DRY_RUN" != "1" ]; then
+if [ -n "$DEP" ] && [ "$DRY_RUN" != "1" ] && [ "${NO_DEP:-0}" != "1" ]; then
     DEP_FLAG="--dependency=afterok:${DEP}"
 fi
 
@@ -220,7 +220,7 @@ fi
 if [ "$STEP" = "all" ] || [ "$STEP" = "4" ]; then
 DEP="${JOB2_ID:-}"
 DEP_FLAG=""
-if [ -n "$DEP" ] && [ "$DRY_RUN" != "1" ]; then
+if [ -n "$DEP" ] && [ "$DRY_RUN" != "1" ] && [ "${NO_DEP:-0}" != "1" ]; then
     DEP_FLAG="--dependency=afterok:${DEP}"
 fi
 
