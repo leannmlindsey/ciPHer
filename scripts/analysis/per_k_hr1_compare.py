@@ -129,29 +129,45 @@ def count_train_proteins_per_k(klist_path, hpp_map_path):
 
 
 def aggregate(per_pair_ranks, host_k, models):
-    """Per (model, K) -> {n_pairs, n_phages, hr1_pair, hr1_anyhit}."""
-    # Group ranks: (model, K, phage) -> list[rank or None]
+    """Per (model, K) -> {n_pairs, n_phages, hr1_pair, hr1_anyhit, mrr_anyhit, mrr_pair}.
+
+    Aggregation:
+      - n_pairs: positive (phage, host) pairs of K
+      - n_phages: distinct phages with ≥1 positive host of K
+      - hr1_pair: pair-level HR@1 (fraction of pairs at rank 1)
+      - hr1_anyhit: phage-level HR@1 (any positive host at rank 1)
+      - mrr_pair: mean(1/rank) over all pairs (None → 0)
+      - mrr_anyhit: per phage take 1/min(rank) across positives (or 0 if
+                    none scored), then average across phages — the
+                    standard retrieval MRR at the query (= phage) level.
+    """
     bucket = defaultdict(list)
     for (mid, phage, host), rank in per_pair_ranks.items():
         k = host_k.get(host) or ''
         if not k or k.lower() == 'null':
             k = '<null>'
         bucket[(mid, k, phage)].append(rank)
-    # Aggregate to (model, K)
+
     out = defaultdict(lambda: {'n_pairs': 0, 'n_phages': 0,
-                               'pair_hits': 0, 'phage_hits': 0})
+                               'pair_hits': 0, 'phage_hits': 0,
+                               'rr_pair_sum': 0.0,
+                               'rr_anyhit_sum': 0.0})
     for (mid, k, phage), ranks in bucket.items():
         rec = out[(mid, k)]
         rec['n_phages'] += 1
         rec['n_pairs'] += len(ranks)
         for r in ranks:
-            if r is not None and r == 1:
-                rec['pair_hits'] += 1
-        # any-hit per phage: did ANY positive host of this phage with
-        # this K land at rank 1?
-        if any(r is not None and r == 1 for r in ranks):
-            rec['phage_hits'] += 1
-    # Compute rates
+            if r is not None:
+                rec['rr_pair_sum'] += 1.0 / r
+                if r == 1:
+                    rec['pair_hits'] += 1
+        scored = [r for r in ranks if r is not None]
+        if scored:
+            best = min(scored)
+            rec['rr_anyhit_sum'] += 1.0 / best
+            if best == 1:
+                rec['phage_hits'] += 1
+
     table = {}
     for (mid, k), rec in out.items():
         n_pair = rec['n_pairs']
@@ -162,81 +178,89 @@ def aggregate(per_pair_ranks, host_k, models):
             'phage_hits': rec['phage_hits'],
             'hr1_pair': rec['pair_hits'] / n_pair if n_pair else 0.0,
             'hr1_anyhit': rec['phage_hits'] / n_phage if n_phage else 0.0,
+            'mrr_pair': rec['rr_pair_sum'] / n_pair if n_pair else 0.0,
+            'mrr_anyhit': rec['rr_anyhit_sum'] / n_phage if n_phage else 0.0,
         }
     return table
 
 
 def emit_table(table, models, tropiseq_vocab, train_counts, out_csv, mode):
-    """Write a per-K table with columns: K, K_in_tropiseq_vocab,
-    optional <model>__train_md5s for each model that has a training-list
-    mapping, then per-model {n_phages, hr1_anyhit, n_pairs, hr1_pair}.
+    """Emit a clean per-K table to stdout (column-aligned) and CSV.
 
-    train_counts: {model_id -> {K -> n_train_md5s}} or None.
+    Columns per model: train_md5s (optional), n_phages, n_pairs, HR1_anyhit,
+    HR1_pair, MRR_anyhit, MRR_pair.
+
     Sorted by descending total n_phages across models for that K."""
     all_ks = sorted({k for (_, k) in table}, key=lambda k: (
         -sum(table.get((m, k), {}).get('n_phages', 0) for m in models),
         k,
     ))
-    fieldnames = ['K', 'K_in_tropiseq_vocab']
+
+    base_fields = ['K', 'K_in_tropiseq_vocab']
+    per_model_keys = []
     for m in models:
+        keys = []
         if train_counts and m in train_counts:
-            fieldnames.append(f'{m}__train_md5s')
-        fieldnames += [f'{m}__n_phages', f'{m}__anyhit_HR1',
-                       f'{m}__n_pairs', f'{m}__pair_HR1']
+            keys.append('train_md5s')
+        keys += ['n_phages', 'n_pairs', 'HR1_anyhit', 'HR1_pair',
+                 'MRR_anyhit', 'MRR_pair']
+        per_model_keys.append(keys)
+
+    fieldnames = list(base_fields)
+    for m, keys in zip(models, per_model_keys):
+        for k in keys:
+            fieldnames.append(f'{m}__{k}')
+
+    # Build all rows first (consistent for stdout and CSV)
+    rows = []
+    for k_lbl in all_ks:
+        in_vocab = ''
+        if tropiseq_vocab is not None:
+            in_vocab = 'yes' if k_lbl in tropiseq_vocab else 'no'
+        row = {'K': k_lbl, 'K_in_tropiseq_vocab': in_vocab}
+        for m, keys in zip(models, per_model_keys):
+            rec = table.get((m, k_lbl), {})
+            tcount = (train_counts.get(m, {}).get(k_lbl, 0)
+                      if train_counts and m in train_counts else None)
+            for kk in keys:
+                col = f'{m}__{kk}'
+                if kk == 'train_md5s':
+                    row[col] = tcount if tcount is not None else 0
+                elif kk in ('n_phages', 'n_pairs'):
+                    row[col] = rec.get(kk, 0)
+                elif kk == 'HR1_anyhit':
+                    row[col] = round(rec.get('hr1_anyhit', 0.0), 4)
+                elif kk == 'HR1_pair':
+                    row[col] = round(rec.get('hr1_pair', 0.0), 4)
+                elif kk == 'MRR_anyhit':
+                    row[col] = round(rec.get('mrr_anyhit', 0.0), 4)
+                elif kk == 'MRR_pair':
+                    row[col] = round(rec.get('mrr_pair', 0.0), 4)
+        rows.append(row)
 
     if out_csv:
         os.makedirs(os.path.dirname(out_csv) or '.', exist_ok=True)
-        outf = open(out_csv, 'w', newline='')
-        w = csv.DictWriter(outf, fieldnames=fieldnames)
-        w.writeheader()
-    else:
-        outf = None
+        with open(out_csv, 'w', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            for row in rows:
+                w.writerow(row)
+        print(f'Wrote {out_csv} ({len(rows)} K-types)', file=sys.stderr)
 
-    # Pretty stdout — one block per model showing train n / phage hits.
-    print(f'\nPer-K HR@1 ({mode}) — sorted by total n_phages')
-    cell_w = 18  # "0.42 (5/12  T=246)"
-    print(f'  {"K":<8} {"vocab":<6} ' + ' '.join(
-        f'{m[:cell_w]:>{cell_w}}' for m in models))
-    print('  ' + '-' * (8 + 7 + (cell_w + 1) * len(models)))
+    # Stdout: aligned columns. Width per column = max(header len, max value len).
+    widths = {}
+    for col in fieldnames:
+        w_col = len(col)
+        for row in rows:
+            v = row.get(col, '')
+            w_col = max(w_col, len(str(v)))
+        widths[col] = w_col
 
-    for k in all_ks:
-        in_vocab = '?'
-        if tropiseq_vocab is not None:
-            in_vocab = 'yes' if k in tropiseq_vocab else 'no'
-        per_m_rows = {}
-        line = [f'{k:<8}', f'{in_vocab:<6}']
-        for m in models:
-            rec = table.get((m, k), {})
-            n_p = rec.get('n_phages', 0)
-            hr1a = rec.get('hr1_anyhit', None)
-            n_pr = rec.get('n_pairs', 0)
-            hr1p = rec.get('hr1_pair', None)
-            n_train = (train_counts.get(m, {}).get(k)
-                       if train_counts and m in train_counts else None)
-            per_m_rows[f'{m}__n_phages'] = n_p
-            per_m_rows[f'{m}__anyhit_HR1'] = round(hr1a, 4) if hr1a is not None else ''
-            per_m_rows[f'{m}__n_pairs'] = n_pr
-            per_m_rows[f'{m}__pair_HR1'] = round(hr1p, 4) if hr1p is not None else ''
-            if train_counts and m in train_counts:
-                per_m_rows[f'{m}__train_md5s'] = n_train if n_train is not None else 0
-
-            if n_p > 0:
-                hits = rec.get('phage_hits', 0)
-                t = f'T={n_train}' if n_train is not None else ''
-                cell = f'{hr1a:.2f} ({hits}/{n_p}){("  " + t) if t else ""}'
-            else:
-                cell = '   .   '
-            line.append(f'{cell:>{cell_w}}')
-        print('  ' + ' '.join(line))
-
-        if outf is not None:
-            row = {'K': k, 'K_in_tropiseq_vocab': in_vocab}
-            row.update(per_m_rows)
-            w.writerow(row)
-
-    if outf is not None:
-        outf.close()
-        print(f'\nWrote {out_csv}')
+    print(f'\nPer-K HR@1 / MRR ({mode}) — sorted by total n_phages\n')
+    print('  '.join(c.ljust(widths[c]) for c in fieldnames))
+    print('  '.join('-' * widths[c] for c in fieldnames))
+    for row in rows:
+        print('  '.join(str(row.get(c, '')).ljust(widths[c]) for c in fieldnames))
 
 
 def main():
