@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 AGENT6_TSV = ('/Users/leannmlindsey/WORK/PHI_TSP/cipher-depolymerase-domain/'
               'data/recall_at_k_4way/recall_at_k_4way.tsv')
 HARVEST_CSV = 'results/experiment_log.csv'
-CIPHER_RUN_NAME = 'highconf_pipeline_K_prott5_mean'
+CIPHER_RUN_NAME = 'sweep_prott5_mean_cl70'
 DATASETS = ['CHEN', 'GORODNICHIV', 'UCSD', 'PBIP', 'PhageHostLearn']
 
 OUT_SVG = 'results/figures/recall_at_k_per_dataset.svg'
@@ -113,7 +113,7 @@ def weighted_overall_from_agent6(agent6, model):
     return {k: v / den for k, v in num.items()}
 
 
-def plot_panel(ax, title, n, cipher_modes, tropi_models):
+def plot_panel(ax, title, n, cipher_modes, tropi_models, footnote=None):
     """Draw one panel. cipher_modes={mode:{k:v}}; tropi_models={model:{k:v}}."""
     ks = list(range(1, 21))
     for mode in ('k_only', 'o_only', 'or'):
@@ -137,6 +137,12 @@ def plot_panel(ax, title, n, cipher_modes, tropi_models):
     ax.set_ylim(0, 1.05)
     ax.set_xticks([1, 5, 10, 15, 20])
     ax.grid(alpha=0.3)
+    if footnote:
+        ax.text(0.5, 0.02, footnote, transform=ax.transAxes,
+                ha='center', va='bottom', fontsize=8, style='italic',
+                color='#555',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='#fff8e1',
+                          edgecolor='#bbb', alpha=0.85))
 
 
 def main():
@@ -156,6 +162,7 @@ def main():
 
     for i, ds in enumerate(panels):
         ax = axes[i // 3, i % 3]
+        footnote = None
         if ds == 'overall':
             n = sum(agent6.get((d, 'TropiSEQ'), {}).get('n_phages', 0)
                     for d in DATASETS)
@@ -166,7 +173,10 @@ def main():
                             for m in ('TropiSEQ', 'TropiGAT', 'Combined')}
             n = agent6.get((ds, 'TropiSEQ'), {}).get('n_phages')
             title = ds
-        plot_panel(ax, title, n, cipher.get(ds, {}), tropi_models)
+            if ds == 'GORODNICHIV':
+                footnote = ('no O labels in publication;\n'
+                            'cipher OR = K (no O contribution)')
+        plot_panel(ax, title, n, cipher.get(ds, {}), tropi_models, footnote=footnote)
         if i % 3 == 0:
             ax.set_ylabel('Recall@k (phage-level any-hit, strict denom)')
 

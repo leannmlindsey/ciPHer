@@ -1,21 +1,26 @@
-"""MRR (Mean Reciprocal Rank) ranking heatmap: cipher (K/O/OR) vs
-DpoTropiSearch (TropiSEQ + TropiGAT + Combined Tropi) across all 5
+"""MRR (Mean Reciprocal Rank) ranking heatmap-table: cipher (K/O/OR)
+vs DpoTropiSearch (TropiSEQ + TropiGAT + Combined Tropi) across all 5
 cipher validation datasets + a phage-weighted overall column.
+
+Renders compact "table with heatmap in each cell" in two formats:
+  - Matplotlib PNG/SVG (Blues colormap, table-like spacing)
+  - LaTeX .tex using colortbl + xcolor for native typesetting
 
 MRR is computed from the HR@k=1..20 curve, truncated at k=20:
     MRR ≈ Σ_{k=1..20} (HR@k − HR@(k−1)) / k    (HR@0 = 0)
 This treats any phage whose correct host ranks beyond k=20 as
-contributing 0 to the MRR (rank=∞). Truncation error is small for
-small candidate sets (≤ ~50 hosts per dataset).
+contributing 0 to the MRR.
 
-Output: results/figures/mrr_ranking_heatmap.svg/.png + a text table
-to stdout for the lab notebook.
+Outputs:
+  - results/figures/mrr_ranking_heatmap.svg/.png
+  - results/figures/mrr_ranking_heatmap.tex   (standalone LaTeX)
 
 Reads from harvest CSV (cipher) + agent 6 TSV (Tropi) — the harvest
 must have been refreshed via per_head_strict_eval on all 5 datasets.
 
 Usage:
     python scripts/analysis/plot_mrr_ranking.py
+    pdflatex results/figures/mrr_ranking_heatmap.tex   # to render the .tex
 """
 
 import csv
@@ -31,7 +36,7 @@ import numpy as np
 AGENT6_TSV = ('/Users/leannmlindsey/WORK/PHI_TSP/cipher-depolymerase-domain/'
               'data/recall_at_k_4way/recall_at_k_4way.tsv')
 HARVEST_CSV = 'results/experiment_log.csv'
-CIPHER_RUN_NAME = 'highconf_pipeline_K_prott5_mean'
+CIPHER_RUN_NAME = 'sweep_prott5_mean_cl70'
 DATASETS = ['CHEN', 'GORODNICHIV', 'UCSD', 'PBIP', 'PhageHostLearn']
 
 OUT_SVG = 'results/figures/mrr_ranking_heatmap.svg'
@@ -121,6 +126,74 @@ def tropi_overall_curve(agent6, model):
     return {k: v / den for k, v in num.items()}
 
 
+def _blue_rgb(v):
+    """Map MRR value in [0,1] to an RGB triple sampled from matplotlib's
+    Blues colormap. Returns 3 floats in [0,1] suitable for LaTeX
+    \\definecolor{...}{rgb}{r,g,b}."""
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return None
+    rgba = plt.cm.Blues(float(v))
+    return rgba[0], rgba[1], rgba[2]
+
+
+def write_latex_table(path, matrix, columns):
+    """Standalone LaTeX heatmap-table using colortbl + xcolor.
+
+    Compiles with: pdflatex <path>
+    """
+    col_labels = [c if c != 'overall' else 'Overall' for c in columns]
+    n_cols = len(columns)
+
+    lines = []
+    lines.append(r'\documentclass[border=4pt]{standalone}')
+    lines.append(r'\usepackage[table,dvipsnames]{xcolor}')
+    lines.append(r'\usepackage{colortbl}')
+    lines.append(r'\usepackage{array}')
+    lines.append(r'\renewcommand{\arraystretch}{1.25}')
+    lines.append(r'\begin{document}')
+    lines.append(r'\small')
+    lines.append(r'\begin{tabular}{l|' + 'c' * len(DATASETS) + '|c}')
+    lines.append(r'\hline')
+
+    header = r'\textbf{Model} & ' + ' & '.join(rf'\textbf{{{c}}}'
+                                                for c in col_labels) + r' \\'
+    lines.append(header)
+    lines.append(r'\hline')
+
+    for i, (label, family, _) in enumerate(MODEL_ROWS):
+        if i == 3:  # divider between cipher block and Tropi block
+            lines.append(r'\hline')
+        cells = []
+        # escape any latex specials in label
+        latex_label = label.replace('∪', r'$\cup$')
+        for j in range(n_cols):
+            v = matrix[i, j]
+            if np.isnan(v):
+                cells.append(r'\multicolumn{1}{c}{\textit{--}}'
+                             if j < n_cols - 1
+                             else r'\multicolumn{1}{c}{\textit{--}}')
+            else:
+                rgb = _blue_rgb(v)
+                # Use white text when cell is dark, black otherwise
+                txt_color = 'white' if v >= 0.55 else 'black'
+                cell_color = rf'\cellcolor[rgb]{{{rgb[0]:.3f},{rgb[1]:.3f},{rgb[2]:.3f}}}'
+                cells.append(rf'{cell_color}\textcolor{{{txt_color}}}{{{v:.2f}}}')
+        lines.append(rf'{latex_label} & ' + ' & '.join(cells) + r' \\')
+
+    lines.append(r'\hline')
+    lines.append(r'\end{tabular}')
+
+    # Caption / footnote
+    lines.append(r'\\[2pt]')
+    lines.append(r'{\footnotesize\itshape\textcolor{gray!70}{GORODNICHIV: '
+                 'O empty (no O labels in publication); OR = K by construction.}}')
+
+    lines.append(r'\end{document}')
+
+    with open(path, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+
+
 def main():
     os.makedirs(os.path.dirname(OUT_SVG) or '.', exist_ok=True)
 
@@ -146,44 +219,58 @@ def main():
                 continue
             matrix[i, j] = mrr_from_hrk(curve)
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    cmap = plt.cm.viridis
+    # Compact "table with per-cell heatmap" — Blues palette only.
+    fig, ax = plt.subplots(figsize=(7.0, 2.6))
+    cmap = plt.cm.Blues
     im = ax.imshow(matrix, cmap=cmap, aspect='auto', vmin=0, vmax=1.0)
 
     ax.set_xticks(range(len(columns)))
     ax.set_xticklabels([c if c != 'overall' else 'Overall\n(weighted)'
-                        for c in columns], rotation=0, fontsize=10)
+                        for c in columns], fontsize=8)
     ax.set_yticks(range(len(MODEL_ROWS)))
-    ax.set_yticklabels([row[0] for row in MODEL_ROWS], fontsize=10)
+    ax.set_yticklabels([row[0] for row in MODEL_ROWS], fontsize=8)
+    ax.tick_params(axis='both', length=0)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
 
-    # Annotate cells
+    # Annotate cells with the value (white text on dark blue, black on light).
     for i in range(len(MODEL_ROWS)):
         for j in range(len(columns)):
             v = matrix[i, j]
             if np.isnan(v):
                 ax.text(j, i, '—', ha='center', va='center',
-                        color='gray', fontsize=10)
+                        color='#888', fontsize=8)
             else:
-                color = 'white' if v < 0.55 else 'black'
-                ax.text(j, i, f'{v:.3f}', ha='center', va='center',
-                        color=color, fontsize=9)
+                color = 'white' if v >= 0.55 else 'black'
+                ax.text(j, i, f'{v:.2f}', ha='center', va='center',
+                        color=color, fontsize=8)
 
-    cbar = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
-    cbar.set_label('MRR (truncated at k=20)', fontsize=10)
+    # Subtle divider between cipher and Tropi blocks; column divider before Overall.
+    ax.axhline(y=2.5, color='#444', lw=0.6)
+    ax.axvline(x=len(DATASETS) - 0.5, color='#444', lw=0.6)
 
-    # Light divider lines between cipher and Tropi rows
-    ax.axhline(y=2.5, color='black', lw=1.0)
-    ax.axvline(x=len(DATASETS) - 0.5, color='black', lw=1.0)
+    cbar = fig.colorbar(im, ax=ax, fraction=0.018, pad=0.015)
+    cbar.set_label('MRR', fontsize=8)
+    cbar.ax.tick_params(labelsize=7)
 
-    ax.set_title('MRR ranking across cipher validation datasets\n'
-                 f'cipher run: {CIPHER_RUN_NAME}  |  '
-                 'phage-level any-hit, strict denominator',
-                 fontsize=11, fontweight='bold', pad=10)
+    ax.set_title(f'MRR — cipher ({CIPHER_RUN_NAME}) vs DpoTropiSearch',
+                 fontsize=9, pad=4)
+
+    fig.text(0.5, -0.04,
+             'GORODNICHIV: O column empty (no O labels in publication); '
+             'OR = K by construction.',
+             ha='center', fontsize=7.5, style='italic', color='#555')
+
     fig.tight_layout()
     fig.savefig(OUT_SVG, format='svg', bbox_inches='tight')
-    fig.savefig(OUT_SVG.replace('.svg', '.png'), dpi=150, bbox_inches='tight')
+    fig.savefig(OUT_SVG.replace('.svg', '.png'), dpi=200, bbox_inches='tight')
     plt.close(fig)
     print(f'Wrote {OUT_SVG}')
+
+    # ---- Also emit a LaTeX heatmap-table ----
+    out_tex = OUT_SVG.replace('.svg', '.tex')
+    write_latex_table(out_tex, matrix, columns)
+    print(f'Wrote {out_tex}')
 
     # Print table for the lab notebook
     print()

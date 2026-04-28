@@ -254,7 +254,6 @@ python -m cipher.cli.train_runner \\
     --heads k \\
     --positive_list "${POSITIVE_LIST}" \\
     --label_strategy single_label \\
-    --split-style canonical \\
     --lr 1e-05 \\
     --batch_size 64 \\
     --epochs 200 \\

@@ -43,6 +43,9 @@ class AttentionMLPPredictor(Predictor):
     def predict_protein(self, embedding):
         """Predict K and O probabilities for a single protein embedding.
 
+        For K-only or O-only runs (one head missing), the corresponding
+        probs dict is returned empty.
+
         Args:
             embedding: numpy array of shape (embedding_dim,)
 
@@ -50,30 +53,25 @@ class AttentionMLPPredictor(Predictor):
             {'k_probs': {k_type: prob, ...}, 'o_probs': {o_type: prob, ...}}
         """
         x = torch.FloatTensor(embedding).unsqueeze(0).to(self._device)
-
-        with torch.no_grad():
-            k_logits = self._k_model(x)
-            o_logits = self._o_model(x)
-
-        # Convert logits to probabilities.
-        # Strategies that use softmax during training:
-        #   single_label, weighted_soft (both compete between classes)
-        # Strategies that use sigmoid (independent per-class):
-        #   multi_label, multi_label_threshold, weighted_multi_label
         softmax_strategies = {'single_label', 'weighted_soft'}
 
-        if self._k_strategy in softmax_strategies:
-            k_probs_arr = torch.softmax(k_logits, dim=1).cpu().numpy()[0]
-        else:
-            k_probs_arr = torch.sigmoid(k_logits).cpu().numpy()[0]
-
-        if self._o_strategy in softmax_strategies:
-            o_probs_arr = torch.softmax(o_logits, dim=1).cpu().numpy()[0]
-        else:
-            o_probs_arr = torch.sigmoid(o_logits).cpu().numpy()[0]
-
-        k_probs = {k: float(p) for k, p in zip(self._k_classes, k_probs_arr)}
-        o_probs = {o: float(p) for o, p in zip(self._o_classes, o_probs_arr)}
+        k_probs = {}
+        o_probs = {}
+        with torch.no_grad():
+            if self._k_model is not None:
+                k_logits = self._k_model(x)
+                if self._k_strategy in softmax_strategies:
+                    k_probs_arr = torch.softmax(k_logits, dim=1).cpu().numpy()[0]
+                else:
+                    k_probs_arr = torch.sigmoid(k_logits).cpu().numpy()[0]
+                k_probs = {k: float(p) for k, p in zip(self._k_classes, k_probs_arr)}
+            if self._o_model is not None:
+                o_logits = self._o_model(x)
+                if self._o_strategy in softmax_strategies:
+                    o_probs_arr = torch.softmax(o_logits, dim=1).cpu().numpy()[0]
+                else:
+                    o_probs_arr = torch.sigmoid(o_logits).cpu().numpy()[0]
+                o_probs = {o: float(p) for o, p in zip(self._o_classes, o_probs_arr)}
 
         return {'k_probs': k_probs, 'o_probs': o_probs}
 
@@ -111,21 +109,31 @@ def _load_head(model_dir, device):
 
 
 def get_predictor(experiment_dir):
-    """Load trained K and O models and return a Predictor.
+    """Load trained K and/or O models and return a Predictor.
+
+    For K-only or O-only runs, the missing head is skipped (model=None,
+    classes=[]). At least one of model_k/ or model_o/ must exist.
 
     Args:
         experiment_dir: path to experiment directory containing
-                        model_k/ and model_o/ subdirectories
+                        model_k/ and/or model_o/ subdirectories
 
     Returns:
         AttentionMLPPredictor instance
     """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    k_model, k_config = _load_head(
-        os.path.join(experiment_dir, 'model_k'), device)
-    o_model, o_config = _load_head(
-        os.path.join(experiment_dir, 'model_o'), device)
+    k_dir = os.path.join(experiment_dir, 'model_k')
+    o_dir = os.path.join(experiment_dir, 'model_o')
+    k_model, k_config = (None, {})
+    o_model, o_config = (None, {})
+    if os.path.isdir(k_dir) and os.path.exists(os.path.join(k_dir, 'config.json')):
+        k_model, k_config = _load_head(k_dir, device)
+    if os.path.isdir(o_dir) and os.path.exists(os.path.join(o_dir, 'config.json')):
+        o_model, o_config = _load_head(o_dir, device)
+    if k_model is None and o_model is None:
+        raise FileNotFoundError(
+            f'Neither model_k/ nor model_o/ found in {experiment_dir}')
 
     # Determine embedding type from experiment config
     embedding_type = 'esm2_650m'  # default
@@ -140,8 +148,8 @@ def get_predictor(experiment_dir):
     return AttentionMLPPredictor(
         k_model=k_model,
         o_model=o_model,
-        k_classes=k_config['classes'],
-        o_classes=o_config['classes'],
+        k_classes=k_config.get('classes', []),
+        o_classes=o_config.get('classes', []),
         k_strategy=k_config.get('strategy', 'single_label'),
         o_strategy=o_config.get('strategy', 'single_label'),
         embedding_type_name=embedding_type,

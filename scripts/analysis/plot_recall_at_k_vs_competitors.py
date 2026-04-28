@@ -35,7 +35,6 @@ Usage:
 """
 
 import csv
-import json
 import os
 from collections import defaultdict
 
@@ -46,11 +45,9 @@ import matplotlib.pyplot as plt
 
 AGENT6_TSV = ('/Users/leannmlindsey/WORK/PHI_TSP/cipher-depolymerase-domain/'
               'data/recall_at_k_4way/recall_at_k_4way.tsv')
-CIPHER_PHL_JSON = ('experiments/attention_mlp/highconf_pipeline_K_prott5_mean/'
-                   'results/per_head_strict_eval.json')
 HARVEST_CSV = 'results/experiment_log.csv'
 
-CIPHER_RUN_NAME = 'highconf_pipeline_K_prott5_mean'  # for panel 2 selection
+CIPHER_RUN_NAME = 'sweep_prott5_mean_cl70'  # top performer with 5/5 K coverage
 DATASETS = ['CHEN', 'GORODNICHIV', 'UCSD', 'PBIP', 'PhageHostLearn']
 
 OUT_SVG = 'results/figures/recall_at_k_vs_competitors.svg'
@@ -76,14 +73,24 @@ def load_agent6_tsv():
 
 
 def cipher_phl_curves():
-    """K-only, O-only, OR phage-level any-hit on PHL for `highconf_pipeline_K_prott5_mean`."""
-    d = json.load(open(CIPHER_PHL_JSON))
-    phl = d['PhageHostLearn']
+    """K-only, O-only, OR phage-level any-hit on PHL for CIPHER_RUN_NAME.
+
+    Reads from harvest CSV (per-dataset PhageHostLearn_K/O/OR columns).
+    """
+    with open(HARVEST_CSV) as fh:
+        rows = list(csv.DictReader(fh))
+    matches = [r for r in rows if r.get('run_name') == CIPHER_RUN_NAME]
+    if not matches:
+        return None, None
+    r = matches[0]
     out = {}
-    for mode in ('k_only', 'o_only', 'or'):
-        hr = phl[mode]['hr_at_k_any_hit']
-        out[mode] = {int(k): v for k, v in hr.items()}
-    return out, phl['n_strict_phage']
+    for mode_key, col_key in (('k_only', 'K'), ('o_only', 'O'), ('or', 'OR')):
+        out[mode_key] = {k: f(r.get(f'PhageHostLearn_{col_key}_phage2host_anyhit_HR{k}'))
+                         for k in range(1, 21)}
+    n_phl = r.get('PhageHostLearn_n_strict_phage')
+    try: n_phl = int(n_phl) if n_phl else None
+    except (TypeError, ValueError): n_phl = None
+    return out, n_phl
 
 
 def cipher_overall_curves():
