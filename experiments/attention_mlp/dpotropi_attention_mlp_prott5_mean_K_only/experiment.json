@@ -1,0 +1,58 @@
+{
+  "model": "attention_mlp",
+  "config": {
+    "model": {
+      "hidden_dims": [
+        1280,
+        640,
+        320,
+        160
+      ],
+      "attention_dim": 640,
+      "dropout": 0.1
+    },
+    "training": {
+      "batch_size": 64,
+      "learning_rate": 1e-05,
+      "epochs": 200,
+      "patience": 30,
+      "seed": 42,
+      "train_ratio": 0.7,
+      "val_ratio": 0.15,
+      "heads": "k",
+      "split_style": "canonical"
+    },
+    "data": {
+      "association_map": "/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/training_data/dpotropi/dpotropi_phage_protein_map.tsv",
+      "glycan_binders": "/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/training_data/dpotropi/dpotropi_glycan_binders.tsv",
+      "embedding_type": "prott5_mean",
+      "embedding_file": "/work/hdd/bfzj/llindsey1/dpotropi_embeddings/dpotropi_prott5_mean.npz"
+    },
+    "validation": {
+      "val_fasta": "/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/validation_data/metadata/validation_rbps_all.faa",
+      "val_embedding_file": "/work/hdd/bfzj/llindsey1/validation_embeddings_prott5/validation_embeddings_md5.npz",
+      "val_datasets_dir": "/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/validation_data/HOST_RANGE"
+    },
+    "experiment": {
+      "min_sources": 3,
+      "max_k_types": 3,
+      "max_o_types": 3,
+      "single_label": true,
+      "label_strategy": "single_label",
+      "positive_list_path": "/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/training_data/dpotropi/dpotropi_positive.list"
+    }
+  },
+  "n_md5s": 3789,
+  "n_k_classes": 124,
+  "n_o_classes": 1,
+  "timestamp": "2026-04-28 13:27:50",
+  "provenance": {
+    "git_commit": "ce65a78",
+    "git_dirty": true,
+    "host": "gh014.hsn.cm.delta.internal.ncsa.edu",
+    "slurm_job_id": "2208144",
+    "user": "llindsey1",
+    "cli_argv": "/projects/bfzj/llindsey1/PHI_TSP/ciPHer/src/cipher/cli/train_runner.py --model attention_mlp --heads k --positive_list /projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/training_data/dpotropi/dpotropi_positive.list --label_strategy single_label --split-style canonical --lr 1e-05 --batch_size 64 --epochs 200 --patience 30 --embedding_type prott5_mean --embedding_file /work/hdd/bfzj/llindsey1/dpotropi_embeddings/dpotropi_prott5_mean.npz --association_map /projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/training_data/dpotropi/dpotropi_phage_protein_map.tsv --glycan_binders /projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/training_data/dpotropi/dpotropi_glycan_binders.tsv --val_fasta /projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/validation_data/metadata/validation_rbps_all.faa --val_datasets_dir /projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/validation_data/HOST_RANGE --val_embedding_file /work/hdd/bfzj/llindsey1/validation_embeddings_prott5/validation_embeddings_md5.npz --name dpotropi_attention_mlp_prott5_mean_K_only",
+    "timestamp": "2026-04-28 13:27:50"
+  }
+}
