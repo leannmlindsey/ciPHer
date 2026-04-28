@@ -121,9 +121,9 @@ def extract_row(exp_dir, source_label=''):
         row[f'{ds}_rp_n'] = r.get('rank_phages', {}).get('n_pairs', '')
 
     # Per-head strict-denominator HR@k from results/per_head_strict_eval.json.
-    # We emit the FULL k=1..20 curve for the headline metric (best-of-three
-    # any-hit, both directions) so plot scripts can read the harvest CSV
-    # alone — no per-experiment JSON lookup needed.
+    # We emit FULL k=1..20 curves for ALL FOUR head modes (K-only, O-only,
+    # merged, OR) plus best-of-three, in BOTH directions (phage→host and
+    # host→phage), so plot scripts can read the harvest CSV alone.
     #
     # Metric families:
     #   any-hit  (PhageHostLearn-comparable):
@@ -135,27 +135,41 @@ def extract_row(exp_dir, source_label=''):
     #                                THIS host land at rank ≤ k?
     ph = _safe_load(os.path.join(exp_dir, 'results', 'per_head_strict_eval.json'))
     K_VALUES = list(range(1, 21))
+
+    def _curve(d, mode_key, family):
+        """Pull a k=1..20 curve from `d[mode_key][family]`. Returns list of
+        20 floats or None per k. Handles JSON int-vs-str key drift."""
+        out = []
+        for k in K_VALUES:
+            v = (d.get(mode_key, {}).get(family, {}).get(str(k))
+                 or d.get(mode_key, {}).get(family, {}).get(k))
+            try: v = float(v) if v is not None else None
+            except (TypeError, ValueError): v = None
+            out.append(v)
+        return out
+
     for ds in DATASETS:
         d = ph.get(ds, {})
 
-        # Per-mode HR@1 only (saving CSV width)
+        # FULL k=1..20 curves per mode (K, O, merged, OR), phage→host any-hit.
         for mode_key, col_key in (('k_only', 'K'), ('o_only', 'O'),
                                     ('merged', 'merged'), ('or', 'OR')):
-            v = d.get(mode_key, {}).get('hr_at_k_any_hit', {}).get('1')
-            if v is None:
-                v = d.get(mode_key, {}).get('hr_at_k_any_hit', {}).get(1, '')
-            row[f'{ds}_{col_key}_anyhit_HR1'] = v if v != '' else ''
-            v = d.get(mode_key, {}).get('hr_at_k_pair', {}).get('1')
-            if v is None:
-                v = d.get(mode_key, {}).get('hr_at_k_pair', {}).get(1, '')
-            row[f'{ds}_{col_key}_pair_HR1'] = v if v != '' else ''
+            curve = _curve(d, mode_key, 'hr_at_k_any_hit')
+            for k, v in zip(K_VALUES, curve):
+                row[f'{ds}_{col_key}_phage2host_anyhit_HR{k}'] = (
+                    v if v is not None else '')
+            # backward-compat HR@1 alias (old plots read this)
+            row[f'{ds}_{col_key}_anyhit_HR1'] = curve[0] if curve[0] is not None else ''
 
-        # Best-of-three (K, O, merged) per direction — the leaderboard metric
+            pair_curve = _curve(d, mode_key, 'hr_at_k_pair')
+            row[f'{ds}_{col_key}_pair_HR1'] = (
+                pair_curve[0] if pair_curve[0] is not None else '')
+
+        # Best-of-three (K, O, merged) per direction — leaderboard metric
         row[f'{ds}_best_anyhit_HR1'] = d.get('best_anyhit_HR1', '')
         row[f'{ds}_best_pair_HR1'] = d.get('best_strict_HR1', '')
 
-        # FULL HR@k=1..20 curves for the headline (best-of-three) per direction.
-        # Compute from per_head JSON: max over (k_only, o_only, merged) at each k.
+        # Best-of-three FULL curves: max over (k_only, o_only, merged) at each k.
         def _max_curve(family):
             out = []
             for k in K_VALUES:
@@ -168,22 +182,12 @@ def extract_row(exp_dir, source_label=''):
                         except (TypeError, ValueError): pass
                 out.append(max(vs) if vs else None)
             return out
-        # phage→host any-hit (cipher primary direction)
         ph2h = _max_curve('hr_at_k_any_hit')
         for k, v in zip(K_VALUES, ph2h):
             row[f'{ds}_best_phage2host_anyhit_HR{k}'] = (v if v is not None else '')
-        # host→phage any-hit (PHL comparison direction)
         h2p = _max_curve('hr_at_k_phage_any_hit')
         for k, v in zip(K_VALUES, h2p):
             row[f'{ds}_best_host2phage_anyhit_HR{k}'] = (v if v is not None else '')
-        # OR ceiling curve (phage→host direction only, headline)
-        or_curve = []
-        for k in K_VALUES:
-            v = (d.get('or', {}).get('hr_at_k_any_hit', {}).get(str(k))
-                 or d.get('or', {}).get('hr_at_k_any_hit', {}).get(k))
-            or_curve.append(v if v is not None else None)
-        for k, v in zip(K_VALUES, or_curve):
-            row[f'{ds}_OR_phage2host_anyhit_HR{k}'] = (v if v is not None else '')
 
         # Backward-compatible aliases
         row[f'{ds}_K_strict_HR1'] = row[f'{ds}_K_anyhit_HR1']
@@ -268,6 +272,19 @@ def extract_row(exp_dir, source_label=''):
         row[f'overall_OR_anyhit_HR{k}'] = (v if v is not None else '')
     row['overall_OR_anyhit_HR1'] = (
         or_curve[0] if or_curve and or_curve[0] is not None else '')
+
+    # K-only and O-only weighted (phage→host direction) — for fair
+    # K vs O vs OR comparisons at the 5-dataset level (mirrors the
+    # PHL-only K/O/OR trio so plots can apples-to-apples both panels).
+    k_curve = _weighted_overall_curve('K_phage2host_anyhit_HR', 'n_strict_phage')
+    for k, v in zip(range(1, 21), k_curve):
+        row[f'overall_K_anyhit_HR{k}'] = (v if v is not None else '')
+    o_curve = _weighted_overall_curve('O_phage2host_anyhit_HR', 'n_strict_phage')
+    for k, v in zip(range(1, 21), o_curve):
+        row[f'overall_O_anyhit_HR{k}'] = (v if v is not None else '')
+    merged_curve = _weighted_overall_curve('merged_phage2host_anyhit_HR', 'n_strict_phage')
+    for k, v in zip(range(1, 21), merged_curve):
+        row[f'overall_merged_anyhit_HR{k}'] = (v if v is not None else '')
 
     # Per-pair composite (legacy, weighted)
     overall_pair = _weighted_overall_HR1('best_pair_HR1', 'n_strict_pair')
