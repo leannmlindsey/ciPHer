@@ -1,0 +1,74 @@
+{
+  "build_date_utc": "2026-04-28T18:41:49.824750+00:00",
+  "build_agent": "agent4 (CLAUDE_PHI_DATA_ANALYSIS analysis 30 / v4_build)",
+  "inputs": {
+    "HC_K_UAT_multitop.list": {
+      "path": "data/training_data/metadata/highconf_v3_multitop/HC_K_UAT_multitop.list",
+      "n_ids": 37158,
+      "sha256": "6f0baf0fc5cb4f49ff5bae2e2cc6b15dc2d95cad62bedb0cd3cb4a63c38161d1"
+    },
+    "host_phage_protein_map.tsv": {
+      "path": "data/training_data/metadata/host_phage_protein_map.tsv",
+      "sha256": "6a0fd66219a3cfc3e748addb9371f653a554fc94b01fa98bd74460ee2feb1439"
+    },
+    "A23_exclusion_pp_only": {
+      "path": "/Users/leannmlindsey/WORK/CLAUDE_PHI_DATA_ANALYSIS/analyses/23_md5_klabel_disagreement/output/exclusion_candidate_protein_ids_pipeline_positive_only.list",
+      "n_ids": 924,
+      "n_intersect_HC_K_UAT": 63,
+      "sha256": "91012e674546266bbf8120abc2d664f2eb09dee367965574ba1d9e2cad7f19bf"
+    },
+    "A28_inclusion_full_faa": {
+      "path": "/Users/leannmlindsey/WORK/CLAUDE_PHI_DATA_ANALYSIS/analyses/28_v4_candidate_additions/output/v4_inclusion_tropiseq_eligible_full.faa",
+      "n_records": 1057,
+      "sha256": "60453c0b7879eaf26f452e10d3a7e59219c32e9337da5e935a47ce57e78d0a9a"
+    },
+    "A28_classification_csv": {
+      "path": "/Users/leannmlindsey/WORK/CLAUDE_PHI_DATA_ANALYSIS/analyses/28_v4_candidate_additions/output/tropiseq_unique_classification.csv",
+      "sha256": "05c6c20979785a0aecc44fc72aadca3dc094598fabe7b0e728dbbf8a5578d484"
+    },
+    "A25_inclusion_faa": {
+      "path": "/Users/leannmlindsey/WORK/CLAUDE_PHI_DATA_ANALYSIS/analyses/25_phl_phold_novel_candidates/output/advisor_review_phold_NOT_flagged_candidates.faa",
+      "n_records": 10,
+      "sha256": "0f17a22ae88dc41489b92199231a8a31d671edda4efd3c1891d1309defe92022"
+    }
+  },
+  "set_arithmetic": {
+    "HC_K_UAT_size": 37158,
+    "A23_pp_only_size": 924,
+    "A23_intersect_HC_K_UAT_size": 63,
+    "A25_size": 10,
+    "A28_size": 1057,
+    "A25_overlap_HC_K_UAT": 0,
+    "A28_overlap_HC_K_UAT": 0
+  },
+  "outputs": {
+    "pipeline_positive_v4.list": {
+      "size": 38162,
+      "rule": "(HC_K_UAT \u2212 A23) \u222a A25 \u222a A28",
+      "sha256": "fbb40123842c20d55615d814f2887aff5180decc3b1cb2a8f10ff2832e49934e"
+    },
+    "pipeline_positive_v4_no_a23.list": {
+      "size": 38225,
+      "rule": "HC_K_UAT \u222a A25 \u222a A28  (no A23 subtraction)",
+      "sha256": "df8e7fab1fcda46f9d616b3707d0cc85b0422e617305c5477653ef64b412f31a"
+    },
+    "pipeline_positive_v4_clean_only.list": {
+      "size": 37095,
+      "rule": "HC_K_UAT \u2212 A23  (no inclusions)",
+      "sha256": "bf7b468f7cec26d7c276325ce5a7163b7bf0abaac0f2018e774578b807fbe375"
+    },
+    "candidates_v4_additions.faa": {
+      "n_records": 1067,
+      "sha256": "8081d314c14cfce12074fea2b7b93448854ef16e07c02900122be16d01945c4b"
+    },
+    "host_phage_protein_map_v4.tsv": {
+      "n_new_rows": 1152,
+      "sha256": "76e5e52e72cc562858eea28b4c605c1c7647c4e845bf6fb60d9d8fee54986ee5"
+    }
+  },
+  "k_locus_normalisation": {
+    "rule": "TropiSEQ KL{n} \u2192 cipher K{n}",
+    "rationale": "cipher's existing host_phage_protein_map has 364509 K-prefix rows vs 130831 KL-prefix rows; K is dominant. Normalising avoids 'novel K-type' silent drops."
+  },
+  "primary_deliverable": "pipeline_positive_v4.list"
+}
