@@ -34,7 +34,7 @@ set -euo pipefail
 ACCOUNT="${ACCOUNT:-bfzj-dtai-gh}"
 PARTITION="${PARTITION:-ghx4}"
 CONDA_ENV="${CONDA_ENV:-esmfold2}"
-CIPHER_DIR="${CIPHER_DIR:-/projects/bfzj/llindsey1/PHI_TSP/ciPHer-light-attention}"
+CIPHER_DIR="${CIPHER_DIR:-/projects/bfzj/llindsey1/PHI_TSP/cipher-light-attention}"
 DATA_DIR="${DATA_DIR:-/projects/bfzj/llindsey1/PHI_TSP/ciPHer/data}"
 
 EXP_DIR="${EXP_DIR:-${CIPHER_DIR}/experiments/light_attention/la_v3_uat_prott5_xl_seg8}"
