@@ -93,6 +93,41 @@ def load_tropiseq_vocab(path):
     return vocab
 
 
+def count_train_proteins_per_k(klist_path, hpp_map_path):
+    """Per-K count of distinct training MD5s after applying a K-list filter.
+
+    klist_path: protein-ID list (one per line) — the --positive_list_k
+                used during training (e.g. v1 highconf, v3 UAT).
+    hpp_map_path: host_phage_protein_map.tsv with columns
+                  host_genome, K_type, O_type, phage_genome, protein_id,
+                  is_tsp, md5.
+
+    A training "protein" is a distinct (md5, K) pair, since the model
+    sees one supervision signal per (sequence, host-K) tuple. Counting
+    distinct MD5s per K matches the convention used in the
+    2026-04-27-1115 v1-class-filter handoff.
+    """
+    with open(klist_path) as f:
+        klist = {ln.strip() for ln in f if ln.strip()}
+    md5s_by_k = defaultdict(set)
+    with open(hpp_map_path) as f:
+        reader = csv.DictReader(f, delimiter='\t')
+        # Tolerate either header convention used historically:
+        # ('host_assembly', 'host_K', 'host_O', 'phage_id', 'protein_id', 'is_tsp', 'protein_md5')
+        # or the build-script's
+        # ('host_genome',   'K_type', 'O_type', 'phage_genome', 'protein_id', 'is_tsp', 'md5').
+        for row in reader:
+            if row.get('protein_id', '') not in klist:
+                continue
+            k = (row.get('host_K') or row.get('K_type') or '').strip()
+            if not k or k.lower() == 'null':
+                k = '<null>'
+            md5 = (row.get('protein_md5') or row.get('md5') or '').strip()
+            if md5:
+                md5s_by_k[k].add(md5)
+    return {k: len(s) for k, s in md5s_by_k.items()}
+
+
 def aggregate(per_pair_ranks, host_k, models):
     """Per (model, K) -> {n_pairs, n_phages, hr1_pair, hr1_anyhit}."""
     # Group ranks: (model, K, phage) -> list[rank or None]
@@ -131,9 +166,12 @@ def aggregate(per_pair_ranks, host_k, models):
     return table
 
 
-def emit_table(table, models, tropiseq_vocab, out_csv, mode):
-    """Write a per-K table with columns: K, K_in_tropiseq_vocab, then
-    per-model {n_phages, hr1_anyhit, n_pairs, hr1_pair}.
+def emit_table(table, models, tropiseq_vocab, train_counts, out_csv, mode):
+    """Write a per-K table with columns: K, K_in_tropiseq_vocab,
+    optional <model>__train_md5s for each model that has a training-list
+    mapping, then per-model {n_phages, hr1_anyhit, n_pairs, hr1_pair}.
+
+    train_counts: {model_id -> {K -> n_train_md5s}} or None.
     Sorted by descending total n_phages across models for that K."""
     all_ks = sorted({k for (_, k) in table}, key=lambda k: (
         -sum(table.get((m, k), {}).get('n_phages', 0) for m in models),
@@ -141,6 +179,8 @@ def emit_table(table, models, tropiseq_vocab, out_csv, mode):
     ))
     fieldnames = ['K', 'K_in_tropiseq_vocab']
     for m in models:
+        if train_counts and m in train_counts:
+            fieldnames.append(f'{m}__train_md5s')
         fieldnames += [f'{m}__n_phages', f'{m}__anyhit_HR1',
                        f'{m}__n_pairs', f'{m}__pair_HR1']
 
@@ -152,32 +192,41 @@ def emit_table(table, models, tropiseq_vocab, out_csv, mode):
     else:
         outf = None
 
-    # Pretty stdout
+    # Pretty stdout — one block per model showing train n / phage hits.
     print(f'\nPer-K HR@1 ({mode}) — sorted by total n_phages')
-    name_w = max(8, max((len(m) for m in models), default=8))
-    name_w = min(name_w, 36)
-    short = {m: m[:name_w] for m in models}
-    print(f'  {"K":<10} {"vocab":<6} ' + ' '.join(f'{short[m]:>{name_w}}' for m in models))
-    print('  ' + '-' * (10 + 6 + (name_w + 1) * len(models) + len(models)))
+    cell_w = 18  # "0.42 (5/12  T=246)"
+    print(f'  {"K":<8} {"vocab":<6} ' + ' '.join(
+        f'{m[:cell_w]:>{cell_w}}' for m in models))
+    print('  ' + '-' * (8 + 7 + (cell_w + 1) * len(models)))
 
     for k in all_ks:
         in_vocab = '?'
         if tropiseq_vocab is not None:
             in_vocab = 'yes' if k in tropiseq_vocab else 'no'
         per_m_rows = {}
-        line = [f'{k:<10}', f'{in_vocab:<6}']
+        line = [f'{k:<8}', f'{in_vocab:<6}']
         for m in models:
             rec = table.get((m, k), {})
             n_p = rec.get('n_phages', 0)
             hr1a = rec.get('hr1_anyhit', None)
             n_pr = rec.get('n_pairs', 0)
             hr1p = rec.get('hr1_pair', None)
+            n_train = (train_counts.get(m, {}).get(k)
+                       if train_counts and m in train_counts else None)
             per_m_rows[f'{m}__n_phages'] = n_p
             per_m_rows[f'{m}__anyhit_HR1'] = round(hr1a, 4) if hr1a is not None else ''
             per_m_rows[f'{m}__n_pairs'] = n_pr
             per_m_rows[f'{m}__pair_HR1'] = round(hr1p, 4) if hr1p is not None else ''
-            cell = f'{hr1a:.2f} ({n_p:>2})' if (n_p > 0) else '   .   '
-            line.append(f'{cell:>{name_w}}')
+            if train_counts and m in train_counts:
+                per_m_rows[f'{m}__train_md5s'] = n_train if n_train is not None else 0
+
+            if n_p > 0:
+                hits = rec.get('phage_hits', 0)
+                t = f'T={n_train}' if n_train is not None else ''
+                cell = f'{hr1a:.2f} ({hits}/{n_p}){("  " + t) if t else ""}'
+            else:
+                cell = '   .   '
+            line.append(f'{cell:>{cell_w}}')
         print('  ' + ' '.join(line))
 
         if outf is not None:
@@ -203,6 +252,14 @@ def main():
     p.add_argument('--tropiseq-kl-list', default=None,
                    help='optional file with TropiSEQ KL identifiers; flags '
                         'each K-type with K_in_tropiseq_vocab')
+    p.add_argument('--training-list', action='append', default=[],
+                   metavar='MODEL_ID=PATH',
+                   help='associate a model_id with a K-list file (e.g. '
+                        'highconf_pipeline_positive_K.list, HC_K_UAT_multitop.list). '
+                        'Repeat for multiple models. Triggers per-K training '
+                        'protein counts to be added to the table.')
+    p.add_argument('--association-map', default=None,
+                   help='host_phage_protein_map.tsv (required if --training-list given)')
     p.add_argument('--out-csv', default=None,
                    help='write per-K table to this CSV (otherwise stdout only)')
     args = p.parse_args()
@@ -224,12 +281,33 @@ def main():
         n = sum(1 for (mid, _, _) in per_pair if mid == m)
         print(f'  {m}: {n} rows')
 
+    train_counts = None
+    if args.training_list:
+        if not args.association_map:
+            sys.exit('ERROR: --training-list requires --association-map '
+                     '(host_phage_protein_map.tsv)')
+        train_counts = {}
+        for spec in args.training_list:
+            if '=' not in spec:
+                sys.exit(f'ERROR: --training-list expects MODEL_ID=PATH; got {spec!r}')
+            mid, path = spec.split('=', 1)
+            if mid not in models:
+                print(f'WARNING: --training-list {mid!r} not in --models; skipping',
+                      file=sys.stderr)
+                continue
+            print(f'  computing per-K training counts for {mid} from {path} ...',
+                  file=sys.stderr)
+            train_counts[mid] = count_train_proteins_per_k(path, args.association_map)
+            print(f'    {len(train_counts[mid])} K-types covered, '
+                  f'total distinct md5s: '
+                  f'{sum(train_counts[mid].values())}', file=sys.stderr)
+
     tropiseq_vocab = load_tropiseq_vocab(args.tropiseq_kl_list)
     if tropiseq_vocab:
         print(f'Loaded {len(tropiseq_vocab)} TropiSEQ-vocab K identifiers')
 
     table = aggregate(per_pair, host_k, models)
-    emit_table(table, models, tropiseq_vocab, args.out_csv,
+    emit_table(table, models, tropiseq_vocab, train_counts, args.out_csv,
                mode=f'head={args.head}')
 
 
