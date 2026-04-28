@@ -1,0 +1,38 @@
+model:
+  hidden_dims:
+  - 2560
+  - 1280
+  - 640
+  - 320
+  - 160
+  attention_dim: 640
+  dropout: 0.1
+light_attention:
+  kernel_size: 9
+  conv_dropout: 0.25
+training:
+  batch_size: 64
+  learning_rate: 1.0e-05
+  epochs: 200
+  patience: 30
+  seed: 42
+  train_ratio: 0.7
+  val_ratio: 0.15
+  heads: k
+data:
+  association_map: /projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/training_data/dpotropi/dpotropi_phage_protein_map.tsv
+  glycan_binders: /projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/training_data/dpotropi/dpotropi_glycan_binders.tsv
+  embedding_type: prott5_xl_seg8
+  embedding_file: /work/hdd/bfzj/llindsey1/dpotropi_embeddings/dpotropi_prott5_xl_seg8.npz
+  n_segments: 4
+validation:
+  val_fasta: /projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/validation_data/metadata/validation_rbps_all.faa
+  val_embedding_file: /work/hdd/bfzj/llindsey1/validation_embeddings/prott5_xl_segments8/validation_prott5_xl_segments8_md5.npz
+  val_datasets_dir: /projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/validation_data/HOST_RANGE
+experiment:
+  min_sources: 3
+  max_k_types: 3
+  max_o_types: 3
+  single_label: true
+  label_strategy: single_label
+  positive_list_path: /projects/bfzj/llindsey1/PHI_TSP/ciPHer/data/training_data/dpotropi/dpotropi_positive.list
