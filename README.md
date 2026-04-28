@@ -708,10 +708,10 @@ bash scripts/run_concat_sweep.sh esm2_3b_mean+kmer_aa20_k4     # single pair
 python scripts/analysis/harvest_results.py
 # -> results/experiment_log.csv (one row per run, sorted by PHL+PBIP HR@1)
 
-# Plot HR@k curves across experiments (SVG — slide / paper appendix ready)
-python scripts/analysis/plot_sweep_results.py
-# -> results/figures/sweep_phl_pbip_hrk.svg
-# -> results/figures/sweep_all_datasets_hrk.svg
+# Plot HR@k curves for top-N experiments (any-hit, phage-weighted overall)
+python scripts/analysis/plot_anyhit_curves.py --top 4
+# -> results/figures/anyhit_phage2host_hrk_top4.svg     (cipher primary direction)
+# -> results/figures/anyhit_host2phage_hrk_top4.svg     (PhageHostLearn comparison direction)
 
 # Focused PHL+PBIP table sorted by combined HR@1
 python scripts/analysis/compare_primary_datasets.py --filter sweep_

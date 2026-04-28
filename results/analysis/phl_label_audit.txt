@@ -1,0 +1,160 @@
+PHL LABEL AUDIT (ESM-2 650M mean)
+========================================================================
+
+PHL proteins with K labels:          222
+  resolved to embeddings:            222
+Training md5s with K labels:         54,551
+Distinct K-types in PHL:             67
+Distinct K-types in training:        161
+
+========================================================================
+AUDIT A — K-TYPE TRAINING COVERAGE
+========================================================================
+PHL K-types NEVER in training:       0
+  (these PHL proteins cannot be correctly classified without more training data)
+
+PHL K-types with <5 training examples:  1
+    K44                  — 4 PHL proteins, 3 training proteins
+
+PHL K-types well-represented (≥5 training proteins): 66
+  Top 15 by training count:
+    K64                  — PHL:   24, training:  3065
+    K25                  — PHL:    6, training:  2293
+    K24                  — PHL:    9, training:  1822
+    K10                  — PHL:    6, training:  1664
+    K2                   — PHL:    8, training:  1580
+    KL102                — PHL:    3, training:  1560
+    K30                  — PHL:   17, training:  1551
+    K68                  — PHL:   13, training:  1544
+    K14                  — PHL:   20, training:  1485
+    K3                   — PHL:    4, training:  1267
+    K62                  — PHL:    1, training:  1216
+    K51                  — PHL:    2, training:  1215
+    K17                  — PHL:    3, training:  1199
+    K1                   — PHL:   11, training:  1034
+    K47                  — PHL:   13, training:   941
+
+========================================================================
+AUDIT B — PER-PHL FAILURE BUCKETS
+========================================================================
+  ok_top1           25 / 222  ( 11.3%)
+  ok_top5           25 / 222  ( 11.3%)
+  ok_top10          10 / 222  (  4.5%)
+  C_near_miss       46 / 222  ( 20.7%)
+  A_novel            0 / 222  (  0.0%)
+  A_thin             0 / 222  (  0.0%)
+  B_repr           116 / 222  ( 52.3%)
+
+Bucket key:
+  ok_top1/5/10     = nearest matching neighbour found within top 1/5/10
+  C_near_miss      = match found but only deep in top-50
+  A_novel          = PHL K-type is NEVER in training  (unfixable w/o more data)
+  A_thin           = PHL K-type has <5 training examples  (data-limited)
+  B_repr           = PHL K-type well-represented but embeddings fail to bring it near (representation problem)
+
+========================================================================
+AUDIT C — TRAINING LABEL DIVERSITY (K-types per md5)
+========================================================================
+  1 K-type :     48029 md5s ( 88.0%)
+  2 K-types:      3852 md5s (  7.1%)
+  3 K-types:      1085 md5s (  2.0%)
+  4 K-types:       487 md5s (  0.9%)
+  5 K-types:       286 md5s (  0.5%)
+  6 K-types:       179 md5s (  0.3%)
+  7 K-types:       100 md5s (  0.2%)
+  8 K-types:        77 md5s (  0.1%)
+  9 K-types:        56 md5s (  0.1%)
+  10 K-types:        65 md5s (  0.1%)
+  11 K-types:        33 md5s (  0.1%)
+  12 K-types:        43 md5s (  0.1%)
+  13 K-types:        23 md5s (  0.0%)
+  14 K-types:        18 md5s (  0.0%)
+  15 K-types:        14 md5s (  0.0%)
+  16 K-types:        13 md5s (  0.0%)
+  17 K-types:        19 md5s (  0.0%)
+  18 K-types:        12 md5s (  0.0%)
+  19 K-types:        10 md5s (  0.0%)
+  20 K-types:         8 md5s (  0.0%)
+  21 K-types:        13 md5s (  0.0%)
+  22 K-types:         8 md5s (  0.0%)
+  23 K-types:         9 md5s (  0.0%)
+  24 K-types:         9 md5s (  0.0%)
+  25 K-types:         6 md5s (  0.0%)
+  26 K-types:         4 md5s (  0.0%)
+  27 K-types:         5 md5s (  0.0%)
+  28 K-types:         6 md5s (  0.0%)
+  29 K-types:         8 md5s (  0.0%)
+  31 K-types:         3 md5s (  0.0%)
+  32 K-types:         4 md5s (  0.0%)
+  33 K-types:         4 md5s (  0.0%)
+  34 K-types:         2 md5s (  0.0%)
+  35 K-types:         7 md5s (  0.0%)
+  36 K-types:         3 md5s (  0.0%)
+  37 K-types:         6 md5s (  0.0%)
+  38 K-types:         2 md5s (  0.0%)
+  39 K-types:         2 md5s (  0.0%)
+  43 K-types:         2 md5s (  0.0%)
+  44 K-types:         3 md5s (  0.0%)
+  45 K-types:         3 md5s (  0.0%)
+  47 K-types:         1 md5s (  0.0%)
+  48 K-types:         4 md5s (  0.0%)
+  49 K-types:         3 md5s (  0.0%)
+  50 K-types:         3 md5s (  0.0%)
+  51 K-types:         1 md5s (  0.0%)
+  53 K-types:         2 md5s (  0.0%)
+  56 K-types:         1 md5s (  0.0%)
+  57 K-types:         1 md5s (  0.0%)
+  58 K-types:         2 md5s (  0.0%)
+  61 K-types:         1 md5s (  0.0%)
+  62 K-types:         2 md5s (  0.0%)
+  65 K-types:         2 md5s (  0.0%)
+  69 K-types:         3 md5s (  0.0%)
+  71 K-types:         1 md5s (  0.0%)
+  78 K-types:         1 md5s (  0.0%)
+  80 K-types:         2 md5s (  0.0%)
+  86 K-types:         1 md5s (  0.0%)
+  87 K-types:         2 md5s (  0.0%)
+
+========================================================================
+SAMPLE — 10 FAILING PHL PROTEINS (bucket B_repr)
+========================================================================
+  DGCOCGBI_00002  true K: KL151 (train counts: KL151:453)
+    nearest sim: 0.9993
+    top-5 neighbour K-types: K2 | K1 | K81 | KL114 | K1
+
+  DGCOCGBI_00006  true K: KL151 (train counts: KL151:453)
+    nearest sim: 0.9983
+    top-5 neighbour K-types: K2 | K1 | K1 | K1 | K81
+
+  DGCOCGBI_00014  true K: KL151 (train counts: KL151:453)
+    nearest sim: 0.9968
+    top-5 neighbour K-types: KL184 | K32,KL153 | KL134 | KL139 | KL139
+
+  GNOCEEDF_00036  true K: KL157 (train counts: KL157:128)
+    nearest sim: 0.9993
+    top-5 neighbour K-types: K81 | K2 | K1 | K1 | K1
+
+  GNOCEEDF_00040  true K: KL157 (train counts: KL157:128)
+    nearest sim: 0.9987
+    top-5 neighbour K-types: K1 | K1 | K81 | K2 | K1
+
+  MLLBIMOE_00013  true K: K20 (train counts: K20:804)
+    nearest sim: 0.9999
+    top-5 neighbour K-types: K1 | K1 | KL114 | K1 | K81
+
+  KNDPILCF_00045  true K: K16 (train counts: K16:796)
+    nearest sim: 0.9999
+    top-5 neighbour K-types: KL114 | K1 | K1 | K1 | K81
+
+  KNDPILCF_00049  true K: K16 (train counts: K16:796)
+    nearest sim: 0.9990
+    top-5 neighbour K-types: K2 | K1 | K1 | K81 | K1
+
+  KNDPILCF_00057  true K: K16 (train counts: K16:796)
+    nearest sim: 0.9944
+    top-5 neighbour K-types: K43 | KL141 | K41,K43 | K43 | KL145
+
+  CKALNKNI_00013  true K: K13,K2 (train counts: K13:720;K2:1580)
+    nearest sim: 0.9972
+    top-5 neighbour K-types: K70 | K10,K12 | K12 | K46 | K46
+
