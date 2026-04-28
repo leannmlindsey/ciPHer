@@ -111,6 +111,10 @@ def apply_overrides(config, args):
         config.setdefault('model', {})['attention_dim'] = args.attention_dim
     if args.dropout is not None:
         config.setdefault('model', {})['dropout'] = args.dropout
+    if args.pooler_type is not None:
+        config.setdefault('model', {})['pooler_type'] = args.pooler_type
+    if args.c_terminal_crop is not None:
+        config.setdefault('model', {})['c_terminal_crop'] = args.c_terminal_crop
 
     # Embedding overrides
     if args.embedding_type is not None:
@@ -419,6 +423,16 @@ Examples:
                         help=f'SE attention bottleneck dim (default: {fmt(d_model.get("attention_dim"))})')
     parser.add_argument('--dropout', type=float,
                         help=f'Dropout rate (default: {fmt(d_model.get("dropout"))})')
+    parser.add_argument('--pooler_type',
+                        choices=['conv_attn', 'transformer'],
+                        help='Pooler over per-residue features '
+                             '(light_attention_binary only; ignored by other models). '
+                             f'(default: {fmt(d_model.get("pooler_type"), "conv_attn")})')
+    parser.add_argument('--c_terminal_crop', type=int,
+                        help='Keep only the last N residues of each per-residue '
+                             'embedding before pooling (light_attention_binary only). '
+                             '0 / unset means no cropping. '
+                             f'(default: {fmt(d_model.get("c_terminal_crop"), "no crop")})')
 
     # Embedding
     parser.add_argument('--embedding_type',

@@ -12,7 +12,23 @@ model:
   # enable a mismatch check. Leave null/unset to accept whatever the
   # embedding file produces.
   embed_dim: null
-  pooler_cnn_width: 9       # ConvolutionalAttention kernel width
+
+  # Pooler over per-residue features.
+  #   conv_attn   -- ConvolutionalAttention from PPAM-TDM reference (default)
+  #   transformer -- TransformerEncoder + CLS-token pooling
+  pooler_type: conv_attn
+  pooler_cnn_width: 9            # used by conv_attn only
+  transformer_num_heads: 8       # used by transformer only
+  transformer_num_layers: 2      # used by transformer only
+  transformer_max_len: 2048      # used by transformer only
+
+  # If set (int > 0), keep only the last N residues of each per-residue
+  # embedding before pooling. Motivation: K-type-discriminating residues
+  # are concentrated in the C-terminal binding domain of tailspike RBPs;
+  # mean/attention pooling over the whole protein dilutes that signal.
+  # null/0 means no cropping (use the full sequence).
+  c_terminal_crop: null
+
   dropout: 0.1
 
 training:

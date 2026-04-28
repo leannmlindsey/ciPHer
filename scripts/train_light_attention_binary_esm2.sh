@@ -76,7 +76,20 @@ LABEL_STRATEGY="${LABEL_STRATEGY:-multi_label_threshold}"
 MIN_CLASS_SAMPLES="${MIN_CLASS_SAMPLES:-25}"
 MIN_SOURCES="${MIN_SOURCES:-1}"
 
-NAME="${NAME:-lab_${EMBEDDING_TYPE}_highconf_pipeline}"
+# Pooler architecture: conv_attn (default; PPAM-TDM ConvolutionalAttention)
+# or transformer (CLS-token TransformerEncoder).
+POOLER_TYPE="${POOLER_TYPE:-conv_attn}"
+# C-terminal crop: keep only the last N residues per protein before pooling.
+# Empty / unset = no cropping. Try 300 to focus on the binding domain.
+C_TERMINAL_CROP="${C_TERMINAL_CROP:-}"
+
+# Default run name encodes the architecture variant so A/B comparisons sort
+# together in experiments/light_attention_binary/.
+NAME_SUFFIX="${POOLER_TYPE}"
+if [ -n "${C_TERMINAL_CROP}" ]; then
+    NAME_SUFFIX="${NAME_SUFFIX}_crop${C_TERMINAL_CROP}"
+fi
+NAME="${NAME:-lab_${EMBEDDING_TYPE}_highconf_pipeline_${NAME_SUFFIX}}"
 DRY_RUN="${DRY_RUN:-0}"
 
 # ============================================================
@@ -90,6 +103,8 @@ echo "  Embedding:      ${EMBEDDING_TYPE}"
 echo "  Train emb:      ${TRAIN_EMB}"
 echo "  Val emb:        ${VAL_EMB}"
 echo "  Positive list:  ${POSITIVE_LIST}"
+echo "  Pooler:         ${POOLER_TYPE}"
+echo "  C-term crop:    ${C_TERMINAL_CROP:-none}"
 echo "============================================================"
 
 for f in "${TRAIN_EMB}" "${ASSOC_MAP}" "${GLYCAN_BINDERS}" "${VAL_FASTA}" \
@@ -108,6 +123,11 @@ fi
 # ============================================================
 # Commands run inside the SLURM job
 # ============================================================
+EXTRA_FLAGS="--pooler_type ${POOLER_TYPE}"
+if [ -n "${C_TERMINAL_CROP}" ]; then
+    EXTRA_FLAGS="${EXTRA_FLAGS} --c_terminal_crop ${C_TERMINAL_CROP}"
+fi
+
 TRAIN_CMD="python -m cipher.cli.train_runner \
     --model ${MODEL} \
     --positive_list ${POSITIVE_LIST} \
@@ -125,6 +145,7 @@ TRAIN_CMD="python -m cipher.cli.train_runner \
     --val_fasta ${VAL_FASTA} \
     --val_datasets_dir ${VAL_DATASETS_DIR} \
     --val_embedding_file ${VAL_EMB} \
+    ${EXTRA_FLAGS} \
     --name ${NAME}"
 
 EXP_DIR="${CIPHER_DIR}/experiments/${MODEL}/${NAME}"

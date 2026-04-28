@@ -24,6 +24,8 @@ from model import (  # noqa: E402
     ConvolutionalAttention,
     LightAttentionBinary,
     PerResidueDataset,
+    TransformerPooler,
+    crop_c_terminal,
     per_residue_collate_fn,
     bce_loss,
 )
@@ -347,3 +349,79 @@ class TestLoadEmbeddingsOrBins:
         empty.mkdir()
         with pytest.raises(FileNotFoundError, match='No .npz files'):
             load_embeddings_or_bins(str(empty), log=self._silent)
+
+
+# ---------------------------------------------------------------------------
+# C-terminal cropping
+# ---------------------------------------------------------------------------
+
+class TestCTerminalCrop:
+    def test_crop_keeps_last_n(self):
+        emb = torch.arange(50, dtype=torch.float32).reshape(10, 5)
+        out = crop_c_terminal(emb, 4)
+        assert out.shape == (4, 5)
+        # last 4 rows (residues 6..9) preserved verbatim
+        torch.testing.assert_close(out, emb[6:])
+
+    def test_crop_none_passthrough(self):
+        emb = torch.zeros(20, 8)
+        assert crop_c_terminal(emb, None).shape == (20, 8)
+        assert crop_c_terminal(emb, 0).shape == (20, 8)
+        assert crop_c_terminal(emb, -1).shape == (20, 8)
+
+    def test_crop_larger_than_sequence(self):
+        """If N > L, return the whole protein unchanged."""
+        emb = torch.zeros(5, 8)
+        assert crop_c_terminal(emb, 100).shape == (5, 8)
+
+    def test_dataset_applies_crop(self):
+        """PerResidueDataset(c_terminal_crop=N) should crop on construction."""
+        embs = [np.random.rand(20, 4).astype(np.float32),
+                np.random.rand(50, 4).astype(np.float32),
+                np.random.rand(3, 4).astype(np.float32)]
+        labels = np.array([[1, 0], [0, 1], [1, 1]], dtype=np.float32)
+        ds = PerResidueDataset(embs, labels, c_terminal_crop=10)
+        # Long proteins cropped to 10; short protein (L=3) untouched
+        assert ds.embeddings[0].shape == (10, 4)
+        assert ds.embeddings[1].shape == (10, 4)
+        assert ds.embeddings[2].shape == (3, 4)
+
+
+# ---------------------------------------------------------------------------
+# TransformerPooler
+# ---------------------------------------------------------------------------
+
+class TestTransformerPooler:
+    def test_output_shape(self):
+        pooler = TransformerPooler(embed_dim=16, num_heads=2, num_layers=1, max_len=64)
+        x = torch.randn(2, 30, 16)
+        mask = torch.ones(2, 30)
+        out = pooler(x, mask)
+        assert out.shape == (2, 16)
+
+    def test_truncates_above_max_len(self):
+        """If sequence is longer than max_len, the pooler keeps the
+        C-terminal max_len residues so we don't crash."""
+        pooler = TransformerPooler(embed_dim=8, num_heads=2, num_layers=1, max_len=20)
+        x = torch.randn(1, 50, 8)
+        mask = torch.ones(1, 50)
+        out = pooler(x, mask)
+        assert out.shape == (1, 8)
+
+    def test_lab_model_with_transformer_pooler(self):
+        """End-to-end: LightAttentionBinary(pooler_type='transformer') runs."""
+        m = LightAttentionBinary(
+            embed_dim=16, num_classes=10, pooler_type='transformer',
+            transformer_num_heads=2, transformer_num_layers=1,
+            transformer_max_len=64,
+        )
+        m.eval()
+        x = torch.randn(3, 20, 16)
+        mask = torch.ones(3, 20)
+        with torch.no_grad():
+            logits = m(x, mask)
+        assert logits.shape == (3, 10)
+
+    def test_unknown_pooler_type_raises(self):
+        with pytest.raises(ValueError, match='pooler_type'):
+            LightAttentionBinary(embed_dim=16, num_classes=5, pooler_type='bogus')

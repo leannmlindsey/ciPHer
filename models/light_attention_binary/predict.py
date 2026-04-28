@@ -15,20 +15,23 @@ import numpy as np
 import torch
 
 from cipher.evaluation.predictor import Predictor
-from model import LightAttentionBinary
+from model import LightAttentionBinary, crop_c_terminal
 
 
 class LightAttentionBinaryPredictor(Predictor):
     """Predictor backed by trained K and O LightAttentionBinary heads."""
 
     def __init__(self, k_model, o_model, k_classes, o_classes,
-                 embedding_type_name, device):
+                 embedding_type_name, device,
+                 k_c_terminal_crop=None, o_c_terminal_crop=None):
         self._k_model = k_model
         self._o_model = o_model
         self._k_classes = k_classes
         self._o_classes = o_classes
         self._embedding_type = embedding_type_name
         self._device = device
+        self._k_c_terminal_crop = k_c_terminal_crop
+        self._o_c_terminal_crop = o_c_terminal_crop
 
     @property
     def embedding_type(self):
@@ -57,13 +60,20 @@ class LightAttentionBinaryPredictor(Predictor):
                 f'LightAttentionBinary expects per-residue embeddings of '
                 f'shape (L, D); got {emb.shape}.'
             )
-        L, _ = emb.shape
-        x = torch.from_numpy(emb).unsqueeze(0).to(self._device)      # [1, L, D]
-        masks = torch.ones(1, L, dtype=torch.float32, device=self._device)
+
+        # Each head may have been trained with its own C-terminal crop.
+        # Apply per-head before model forward so inference matches training.
+        emb_k = crop_c_terminal(emb, self._k_c_terminal_crop)
+        emb_o = crop_c_terminal(emb, self._o_c_terminal_crop)
 
         with torch.no_grad():
-            k_logits = self._k_model(x, masks)
-            o_logits = self._o_model(x, masks)
+            x_k = torch.from_numpy(emb_k).unsqueeze(0).to(self._device)
+            mask_k = torch.ones(1, x_k.shape[1], dtype=torch.float32, device=self._device)
+            k_logits = self._k_model(x_k, mask_k)
+
+            x_o = torch.from_numpy(emb_o).unsqueeze(0).to(self._device)
+            mask_o = torch.ones(1, x_o.shape[1], dtype=torch.float32, device=self._device)
+            o_logits = self._o_model(x_o, mask_o)
 
         # Always sigmoid -- every head was trained with BCE-per-class.
         k_probs_arr = torch.sigmoid(k_logits).cpu().numpy()[0]
@@ -83,7 +93,11 @@ def _load_head(model_dir, device):
     model = LightAttentionBinary(
         embed_dim=config['embed_dim'],
         num_classes=config['num_classes'],
+        pooler_type=config.get('pooler_type', 'conv_attn'),
         pooler_cnn_width=config.get('pooler_cnn_width', 9),
+        transformer_num_heads=config.get('transformer_num_heads', 8),
+        transformer_num_layers=config.get('transformer_num_layers', 2),
+        transformer_max_len=config.get('transformer_max_len', 2048),
         dropout=config.get('dropout', 0.1),
     )
 
@@ -124,4 +138,6 @@ def get_predictor(experiment_dir):
         o_classes=o_config['classes'],
         embedding_type_name=embedding_type,
         device=device,
+        k_c_terminal_crop=k_config.get('c_terminal_crop'),
+        o_c_terminal_crop=o_config.get('c_terminal_crop'),
     )

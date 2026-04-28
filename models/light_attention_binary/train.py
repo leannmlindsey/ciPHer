@@ -191,7 +191,14 @@ def train_head(head_name, X_train, y_train, X_val, y_val, X_test, y_test,
             f'{sorted(_SUPPORTED_STRATEGIES)}.'
         )
 
+    pooler_type = model_cfg.get('pooler_type', 'conv_attn')
     pooler_cnn_width = int(model_cfg.get('pooler_cnn_width', 9))
+    transformer_num_heads = int(model_cfg.get('transformer_num_heads', 8))
+    transformer_num_layers = int(model_cfg.get('transformer_num_layers', 2))
+    transformer_max_len = int(model_cfg.get('transformer_max_len', 2048))
+    c_terminal_crop = model_cfg.get('c_terminal_crop')
+    if c_terminal_crop is not None:
+        c_terminal_crop = int(c_terminal_crop)
     dropout = float(model_cfg.get('dropout', 0.1))
     lr = float(train_cfg.get('learning_rate', 5e-4))
     weight_decay = float(train_cfg.get('weight_decay', 0.01))
@@ -220,17 +227,24 @@ def train_head(head_name, X_train, y_train, X_val, y_val, X_test, y_test,
     model = LightAttentionBinary(
         embed_dim=embed_dim,
         num_classes=len(classes),
+        pooler_type=pooler_type,
         pooler_cnn_width=pooler_cnn_width,
+        transformer_num_heads=transformer_num_heads,
+        transformer_num_layers=transformer_num_layers,
+        transformer_max_len=transformer_max_len,
         dropout=dropout,
     ).to(device)
+    print(f'  pooler_type: {pooler_type}')
+    if c_terminal_crop:
+        print(f'  c_terminal_crop: {c_terminal_crop} residues')
 
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f'  Parameters: {trainable_params:,} trainable / {total_params:,} total')
 
-    train_dataset = PerResidueDataset(X_train, y_train)
-    val_dataset = PerResidueDataset(X_val, y_val)
-    test_dataset = PerResidueDataset(X_test, y_test)
+    train_dataset = PerResidueDataset(X_train, y_train, c_terminal_crop=c_terminal_crop)
+    val_dataset = PerResidueDataset(X_val, y_val, c_terminal_crop=c_terminal_crop)
+    test_dataset = PerResidueDataset(X_test, y_test, c_terminal_crop=c_terminal_crop)
 
     use_pin = torch.cuda.is_available()
     n_workers = 4 if torch.cuda.is_available() else 0
@@ -324,7 +338,12 @@ def train_head(head_name, X_train, y_train, X_val, y_val, X_test, y_test,
         'embed_dim': embed_dim,
         'num_classes': len(classes),
         'classes': classes,
+        'pooler_type': pooler_type,
         'pooler_cnn_width': pooler_cnn_width,
+        'transformer_num_heads': transformer_num_heads,
+        'transformer_num_layers': transformer_num_layers,
+        'transformer_max_len': transformer_max_len,
+        'c_terminal_crop': c_terminal_crop,
         'dropout': dropout,
         'lr': lr,
         'weight_decay': weight_decay,

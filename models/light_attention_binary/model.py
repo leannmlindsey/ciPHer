@@ -89,23 +89,114 @@ class ConvolutionalAttention(nn.Module):
         return pooled_output
 
 
-class LightAttentionBinary(nn.Module):
-    """Light Attention + SimpleMLP head for per-class binary classification.
+class TransformerPooler(nn.Module):
+    """CLS-token transformer pooler over per-residue embeddings.
 
-    One shared ConvolutionalAttention pooler feeds one SimpleMLP with
-    num_classes output logits. At training time BCEWithLogitsLoss treats each
-    logit as an independent per-class binary head. This matches
-    SequenceClassificationModel from the reference, minus the num_labels==2
-    reduction (we always have num_classes >> 2).
+    Replaces the ConvolutionalAttention pooler with a stack of
+    nn.TransformerEncoderLayer blocks (multi-head self-attention + FFN).
+    A learnable CLS token is prepended to the sequence; the encoder output
+    at position 0 is returned as the pooled [B, D] vector.
+
+    Pre-norm layer order is used (norm_first=True) for stable training
+    from scratch -- standard for vision transformers and modern protein
+    models. Learnable absolute position embeddings up to max_len.
     """
 
-    def __init__(self, embed_dim, num_classes, pooler_cnn_width=9, dropout=0.1):
+    def __init__(self, embed_dim, num_heads=8, num_layers=2,
+                 dim_feedforward=None, dropout=0.1, max_len=2048):
+        super().__init__()
+        if dim_feedforward is None:
+            dim_feedforward = 2 * embed_dim
+        self.embed_dim = embed_dim
+        self.max_len = max_len
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, max_len + 1, embed_dim))
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+        layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim,
+            nhead=num_heads,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(layer, num_layers=num_layers)
+        self.norm = nn.LayerNorm(embed_dim)
+
+    def forward(self, embeddings, masks=None, return_attns=False):
+        """
+        Args:
+            embeddings: [B, L, D]
+            masks: [B, L] with 1 for real residues, 0 for padding
+            return_attns: ignored (encoder doesn't expose per-layer weights cleanly);
+                included for API compatibility with ConvolutionalAttention.
+
+        Returns:
+            pooled: [B, D]
+        """
+        B, L, _ = embeddings.shape
+        if L > self.max_len:
+            embeddings = embeddings[:, -self.max_len:, :]
+            if masks is not None:
+                masks = masks[:, -self.max_len:]
+            L = self.max_len
+
+        cls = self.cls_token.expand(B, -1, -1)
+        x = torch.cat([cls, embeddings], dim=1)
+        x = x + self.pos_embed[:, :L + 1, :]
+
+        key_padding_mask = None
+        if masks is not None:
+            cls_mask = torch.ones(B, 1, dtype=masks.dtype, device=masks.device)
+            full_mask = torch.cat([cls_mask, masks], dim=1)
+            key_padding_mask = (full_mask == 0)
+
+        out = self.encoder(x, src_key_padding_mask=key_padding_mask)
+        pooled = self.norm(out[:, 0])
+        if return_attns:
+            return pooled, None
+        return pooled
+
+
+class LightAttentionBinary(nn.Module):
+    """Pooler + SimpleMLP head for per-class binary classification.
+
+    One shared pooler feeds one SimpleMLP with num_classes output logits.
+    BCEWithLogitsLoss treats each logit as an independent binary head.
+
+    Pooler is selectable via `pooler_type`:
+        'conv_attn' (default) -- ConvolutionalAttention from the PPAM-TDM
+            reference. Two Conv1d(width=W) + softmax-attention + max-pool.
+        'transformer' -- TransformerPooler with CLS token. More expressive
+            but more parameters; may help when the K-discriminating signal
+            lives in a few specific residues that softmax-attention cannot
+            isolate.
+    """
+
+    def __init__(self, embed_dim, num_classes, pooler_type='conv_attn',
+                 pooler_cnn_width=9, transformer_num_heads=8,
+                 transformer_num_layers=2, transformer_max_len=2048,
+                 dropout=0.1):
         super().__init__()
         if num_classes < 2:
             raise ValueError('num_classes must be >= 2')
         self.embed_dim = embed_dim
         self.num_classes = num_classes
-        self.pooler = ConvolutionalAttention(embed_dim, width=pooler_cnn_width)
+        self.pooler_type = pooler_type
+        if pooler_type == 'conv_attn':
+            self.pooler = ConvolutionalAttention(embed_dim, width=pooler_cnn_width)
+        elif pooler_type == 'transformer':
+            self.pooler = TransformerPooler(
+                embed_dim,
+                num_heads=transformer_num_heads,
+                num_layers=transformer_num_layers,
+                max_len=transformer_max_len,
+                dropout=dropout,
+            )
+        else:
+            raise ValueError(
+                f"pooler_type must be 'conv_attn' or 'transformer'; got {pooler_type!r}")
         self.classifier = SimpleMLP(embed_dim, embed_dim // 2, num_classes, dropout=dropout)
 
     def forward(self, embeddings, masks=None, return_attns=False):
@@ -116,17 +207,38 @@ class LightAttentionBinary(nn.Module):
         return self.classifier(pooled)
 
 
+def crop_c_terminal(emb, n_residues):
+    """Keep the last `n_residues` rows of a (L, D) tensor / array.
+
+    Returns the input unchanged if `n_residues` is None, <= 0, or >= L.
+    Used to focus the pooler on the C-terminal binding domain of
+    tailspike-like RBPs, where K-type-discriminating residues are
+    concentrated.
+    """
+    if n_residues is None or n_residues <= 0:
+        return emb
+    L = emb.shape[0]
+    if n_residues >= L:
+        return emb
+    return emb[-n_residues:]
+
+
 class PerResidueDataset(Dataset):
     """Variable-length per-residue embeddings paired with multi-hot labels.
 
     Args:
         embeddings: list of arrays, each shape (L_i, D)
-        labels:     array (N, num_classes), multi-hot or one-hot
+        labels: array (N, num_classes), multi-hot or one-hot
+        c_terminal_crop: if set, keep only the last N residues of each
+            embedding. None or <= 0 means no cropping (default).
     """
 
-    def __init__(self, embeddings, labels):
+    def __init__(self, embeddings, labels, c_terminal_crop=None):
+        if c_terminal_crop is not None and c_terminal_crop > 0:
+            embeddings = [crop_c_terminal(e, c_terminal_crop) for e in embeddings]
         self.embeddings = [torch.as_tensor(e, dtype=torch.float32) for e in embeddings]
         self.labels = torch.as_tensor(np.asarray(labels), dtype=torch.float32)
+        self.c_terminal_crop = c_terminal_crop
 
     def __len__(self):
         return len(self.labels)
