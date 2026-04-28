@@ -108,6 +108,7 @@ source \$(conda info --base)/etc/profile.d/conda.sh
 conda activate ${CONDA_ENV}
 cd ${CIPHER_DIR}
 export PYTHONPATH=${CIPHER_DIR}/src:\${PYTHONPATH:-}
+export PYTHONUNBUFFERED=1
 
 echo \"======================================\"
 echo \"Evaluate: ${EXP_NAME}\"

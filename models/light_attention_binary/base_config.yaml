@@ -37,6 +37,10 @@ training:
   weight_decay: 0.01
   epochs: 200
   patience: 30
+  # Linear LR warmup epochs before cosine decay. 0 = legacy behaviour
+  # (cosine annealing from step 1). Set to 5-10 when training the
+  # transformer pooler from scratch -- avoids early gradient explosion.
+  warmup_epochs: 0
   grad_clip: 0.0            # Off by default (matches colleague's Lightning setup)
   seed: 42
   train_ratio: 0.7

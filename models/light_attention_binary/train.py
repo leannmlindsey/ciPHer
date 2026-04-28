@@ -14,6 +14,7 @@ Per-head pipeline:
 
 import glob
 import json
+import math
 import os
 import random
 import time
@@ -39,6 +40,34 @@ from model import (
 _SUPPORTED_STRATEGIES = {
     'multi_label', 'multi_label_threshold', 'weighted_multi_label',
 }
+
+
+def make_warmup_cosine_schedule(warmup_epochs, total_epochs, min_lr_ratio=2e-3):
+    """Linear warmup for `warmup_epochs` then cosine decay over the rest.
+
+    Returns a callable `lambda_fn(epoch) -> lr_factor` suitable for
+    torch.optim.lr_scheduler.LambdaLR. `lr_factor` is in
+    [min_lr_ratio, 1.0]; the optimizer's effective LR is base_lr * factor.
+
+    With warmup_epochs=0 this reduces to a pure cosine decay matching the
+    legacy CosineAnnealingLR(eta_min=base_lr*min_lr_ratio) behaviour.
+    Standard recipe for training transformers from scratch -- avoids the
+    early-step gradient explosion that locks the model into bad basins.
+
+    Args:
+        warmup_epochs: number of epochs to ramp lr linearly 0 -> 1.
+        total_epochs: total number of epochs (warmup + decay).
+        min_lr_ratio: floor for the lr factor at the end of cosine decay
+            (e.g. 2e-3 with base_lr=5e-4 -> floor lr ~ 1e-6).
+    """
+    def lambda_fn(epoch):
+        if warmup_epochs > 0 and epoch < warmup_epochs:
+            return float(epoch + 1) / float(max(1, warmup_epochs))
+        decay_epochs = max(1, total_epochs - warmup_epochs)
+        progress = min(1.0, (epoch - warmup_epochs) / decay_epochs)
+        cos_factor = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min_lr_ratio + (1.0 - min_lr_ratio) * cos_factor
+    return lambda_fn
 
 
 def load_embeddings_or_bins(emb_path, md5_filter=None, log=print):
@@ -206,6 +235,7 @@ def train_head(head_name, X_train, y_train, X_val, y_val, X_test, y_test,
     patience = int(train_cfg.get('patience', 30))
     batch_size = int(train_cfg.get('batch_size', 32))
     grad_clip = float(train_cfg.get('grad_clip', 0.0))
+    warmup_epochs = int(train_cfg.get('warmup_epochs', 0))
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'\n  Training {head_name.upper()} head ({len(classes)} classes)')
@@ -270,8 +300,19 @@ def train_head(head_name, X_train, y_train, X_val, y_val, X_test, y_test,
         model.parameters(), lr=lr, weight_decay=weight_decay,
         eps=1e-6, betas=(0.9, 0.999),
     )
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=epochs, eta_min=1e-6)
+    if warmup_epochs > 0:
+        # Linear warmup -> cosine decay. Min-lr factor matches the prior
+        # CosineAnnealingLR(eta_min=1e-6) at the default lr=5e-4.
+        min_lr_ratio = max(2e-3, 1e-6 / max(lr, 1e-12))
+        scheduler = optim.lr_scheduler.LambdaLR(
+            optimizer,
+            make_warmup_cosine_schedule(warmup_epochs, epochs, min_lr_ratio),
+        )
+        print(f'  lr schedule: warmup={warmup_epochs} epochs '
+              f'-> cosine decay (min_lr_ratio={min_lr_ratio:.2e})')
+    else:
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=epochs, eta_min=1e-6)
 
     os.makedirs(output_dir, exist_ok=True)
     best_val_metric = -float('inf')
@@ -349,6 +390,7 @@ def train_head(head_name, X_train, y_train, X_val, y_val, X_test, y_test,
         'weight_decay': weight_decay,
         'epochs': epochs,
         'patience': patience,
+        'warmup_epochs': warmup_epochs,
         'batch_size': batch_size,
         'train_size': len(X_train),
         'val_size': len(X_val),

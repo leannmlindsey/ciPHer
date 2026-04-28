@@ -30,7 +30,11 @@ from model import (  # noqa: E402
     bce_loss,
 )
 from predict import LightAttentionBinaryPredictor  # noqa: E402
-from train import check_embedding_coverage, load_embeddings_or_bins  # noqa: E402
+from train import (  # noqa: E402
+    check_embedding_coverage,
+    load_embeddings_or_bins,
+    make_warmup_cosine_schedule,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -425,3 +429,40 @@ class TestTransformerPooler:
     def test_unknown_pooler_type_raises(self):
         with pytest.raises(ValueError, match='pooler_type'):
             LightAttentionBinary(embed_dim=16, num_classes=5, pooler_type='bogus')
+
+
+# ---------------------------------------------------------------------------
+# Warmup + cosine LR schedule
+# ---------------------------------------------------------------------------
+
+class TestWarmupCosineSchedule:
+    def test_no_warmup_starts_at_one(self):
+        """warmup_epochs=0 should mean no ramp; epoch 0 == full lr factor."""
+        fn = make_warmup_cosine_schedule(warmup_epochs=0, total_epochs=100)
+        # At epoch 0 with no warmup, factor is the cosine value at t=0,
+        # which is 0.5 * (1 + cos(0)) = 1.0.
+        assert fn(0) == pytest.approx(1.0, rel=1e-6)
+
+    def test_warmup_ramps_linearly(self):
+        fn = make_warmup_cosine_schedule(warmup_epochs=5, total_epochs=100,
+                                          min_lr_ratio=0.0)
+        # Warmup is (epoch+1)/warmup_epochs: epoch 0 -> 0.2, epoch 4 -> 1.0
+        assert fn(0) == pytest.approx(0.2)
+        assert fn(2) == pytest.approx(0.6)
+        assert fn(4) == pytest.approx(1.0)
+
+    def test_cosine_decays_after_warmup(self):
+        fn = make_warmup_cosine_schedule(warmup_epochs=5, total_epochs=15,
+                                          min_lr_ratio=0.0)
+        # At epoch 5 (start of cosine), factor should still be near 1.
+        assert fn(5) == pytest.approx(1.0, abs=1e-6)
+        # At epoch 15 (end), factor should be near 0 (with min_lr_ratio=0).
+        assert fn(15) == pytest.approx(0.0, abs=1e-6)
+        # Midway through cosine should be ~0.5.
+        assert fn(10) == pytest.approx(0.5, abs=1e-3)
+
+    def test_min_lr_ratio_floor(self):
+        fn = make_warmup_cosine_schedule(warmup_epochs=0, total_epochs=10,
+                                          min_lr_ratio=0.1)
+        # At end of cosine, factor should hit the floor.
+        assert fn(10) == pytest.approx(0.1, abs=1e-6)

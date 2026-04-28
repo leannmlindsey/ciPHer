@@ -82,6 +82,9 @@ POOLER_TYPE="${POOLER_TYPE:-conv_attn}"
 # C-terminal crop: keep only the last N residues per protein before pooling.
 # Empty / unset = no cropping. Try 300 to focus on the binding domain.
 C_TERMINAL_CROP="${C_TERMINAL_CROP:-}"
+# Linear warmup epochs before cosine decay. Empty / unset = no warmup
+# (cosine from step 1). Try 5-10 when using POOLER_TYPE=transformer.
+WARMUP_EPOCHS="${WARMUP_EPOCHS:-}"
 
 # Default run name encodes the architecture variant so A/B comparisons sort
 # together in experiments/light_attention_binary/.
@@ -127,6 +130,9 @@ EXTRA_FLAGS="--pooler_type ${POOLER_TYPE}"
 if [ -n "${C_TERMINAL_CROP}" ]; then
     EXTRA_FLAGS="${EXTRA_FLAGS} --c_terminal_crop ${C_TERMINAL_CROP}"
 fi
+if [ -n "${WARMUP_EPOCHS}" ]; then
+    EXTRA_FLAGS="${EXTRA_FLAGS} --warmup_epochs ${WARMUP_EPOCHS}"
+fi
 
 TRAIN_CMD="python -m cipher.cli.train_runner \
     --model ${MODEL} \
@@ -171,6 +177,7 @@ source \$(conda info --base)/etc/profile.d/conda.sh
 conda activate ${CONDA_ENV}
 cd ${CIPHER_DIR}
 export PYTHONPATH=${CIPHER_DIR}/src:\${PYTHONPATH:-}
+export PYTHONUNBUFFERED=1   # so train.py prints stream to the SLURM log live
 
 echo \"======================================\"
 echo \"LightAttentionBinary (ESM-2 650M full): ${NAME}\"

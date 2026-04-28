@@ -53,6 +53,8 @@ def apply_overrides(config, args):
         config.setdefault('training', {})['epochs'] = args.epochs
     if args.patience is not None:
         config.setdefault('training', {})['patience'] = args.patience
+    if args.warmup_epochs is not None:
+        config.setdefault('training', {})['warmup_epochs'] = args.warmup_epochs
     if args.seed is not None:
         config.setdefault('training', {})['seed'] = args.seed
     if args.no_pos_weight:
@@ -360,6 +362,10 @@ Examples:
                         help=f'Max epochs (default: {fmt(d_train.get("epochs"))})')
     parser.add_argument('--patience', type=int,
                         help=f'Early stopping patience (default: {fmt(d_train.get("patience"))})')
+    parser.add_argument('--warmup_epochs', type=int,
+                        help='Linear LR warmup epochs before cosine decay '
+                             '(light_attention_binary only; ignored by other models). '
+                             f'(default: {fmt(d_train.get("warmup_epochs"), 0)})')
     parser.add_argument('--seed', type=int,
                         help=f'Random seed (default: {fmt(d_train.get("seed"))})')
     parser.add_argument('--no_pos_weight', action='store_true',
