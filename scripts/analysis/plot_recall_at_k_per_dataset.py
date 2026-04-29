@@ -143,8 +143,11 @@ def load_hybrid_curves(path):
 
 
 def plot_panel(ax, title, n, cipher_modes, tropi_models, footnote=None,
-               hybrid_curve=None):
-    """Draw one panel. cipher_modes={mode:{k:v}}; tropi_models={model:{k:v}}."""
+               hybrid_curve=None, annotate_or=False):
+    """Draw one panel. cipher_modes={mode:{k:v}}; tropi_models={model:{k:v}}.
+
+    annotate_or=True → label the cipher OR curve's value at k=10 and k=20
+    (used on the weighted-overall panel)."""
     ks = list(range(1, 21))
     for mode in ('k_only', 'o_only', 'or'):
         curve = cipher_modes.get(mode) or {}
@@ -167,6 +170,17 @@ def plot_panel(ax, title, n, cipher_modes, tropi_models, footnote=None,
         if not all(v is None for v in ys):
             ax.plot(ks, ys, color=HYBRID_COLOR, lw=HYBRID_LW,
                     marker='D', markersize=4.5, label=HYBRID_LABEL)
+
+    # Annotate cipher OR at k=10 and k=20 on the weighted-overall panel
+    if annotate_or:
+        or_curve = (cipher_modes or {}).get('or') or {}
+        for k_ann in (10, 20):
+            v = or_curve.get(k_ann)
+            if v is not None:
+                ax.annotate(f'{v:.3f}', xy=(k_ann, v),
+                            xytext=(0, 8), textcoords='offset points',
+                            ha='center', fontsize=9, fontweight='bold',
+                            color=CIPHER_COLOR['or'])
     n_str = f'n={n}' if n is not None else 'n=?'
     ax.set_title(f'{title} ({n_str} phages)', fontsize=11, fontweight='bold')
     ax.set_xlabel('k')
@@ -222,7 +236,8 @@ def main():
         if hybrid is not None:
             hybrid_curve = hybrid.get(ds if ds != 'overall' else 'overall')
         plot_panel(ax, title, n, cipher.get(ds, {}), tropi_models,
-                   footnote=footnote, hybrid_curve=hybrid_curve)
+                   footnote=footnote, hybrid_curve=hybrid_curve,
+                   annotate_or=(ds == 'overall'))
         if i % 3 == 0:
             ax.set_ylabel('Recall@k (phage-level any-hit, strict denom)')
 

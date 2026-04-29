@@ -243,6 +243,17 @@ def main():
             ax.plot(ks, ys, color=HYBRID_COLOR, lw=HYBRID_LW,
                     marker='D', markersize=4.5, label=HYBRID_LABEL)
 
+    # Annotate top cipher OR value at k=10 and k=20 on the weighted-
+    # average panel — gives a quick read on the headline numbers.
+    if cipher_overall and cipher_overall.get('or'):
+        for k_ann in (10, 20):
+            v = cipher_overall['or'].get(k_ann)
+            if v is not None:
+                ax.annotate(f'{v:.3f}', xy=(k_ann, v),
+                            xytext=(0, 8), textcoords='offset points',
+                            ha='center', fontsize=9, fontweight='bold',
+                            color=cipher_color['or'])
+
     total_n = sum(agent6.get((ds, 'TropiSEQ'), {}).get('n_phages', 0)
                   for ds in DATASETS)
     ax.set_title(f'Phage-weighted overall across 5 cipher val datasets '
