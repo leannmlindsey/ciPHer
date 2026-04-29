@@ -258,7 +258,13 @@ def evaluate_dataset_per_head(predictor, original_predict, dataset_dir,
         'hr_at_k_pair':    {k: _hr_or_pair(k) for k in range(1, max_k + 1)},
         'hr_at_k':         {k: _hr_or_pair(k) for k in range(1, max_k + 1)},
     }
-    return out
+
+    # Per-phage rank data — for cross-model OR-union experiments.
+    # Each {mode: {phage_id: best_rank_or_None}}.
+    per_phage_ranks = {
+        mode: dict(mode_phage_anyhit[mode]) for mode in MODES
+    }
+    return out, per_phage_ranks
 
 
 def main():
@@ -271,6 +277,10 @@ def main():
     p.add_argument('--val-datasets-dir', default=None)
     p.add_argument('--out-json', default=None,
                    help='default: <experiment>/results/per_head_strict_eval.json')
+    p.add_argument('--per-phage-out', default=None,
+                   help='Optional TSV: dataset, phage_id, k_only_rank, '
+                        'o_only_rank, merged_rank, or_hit@1 — for cross-'
+                        'model OR-union experiments. None values dumped as ""')
     args = p.parse_args()
 
     if not os.path.isdir(args.experiment_dir):
@@ -296,13 +306,14 @@ def main():
 
     datasets = args.datasets or val['available_datasets']
     out = {}
+    per_phage_all = {}  # {dataset: {mode: {phage: rank}}}
     for ds in datasets:
         ds_dir = os.path.join(paths['ds_dir'], ds)
         if not os.path.isdir(ds_dir):
             print(f'  Skipping {ds} (not found)')
             continue
         print(f'  {ds} ...', end='', flush=True)
-        out[ds] = evaluate_dataset_per_head(
+        out[ds], per_phage_all[ds] = evaluate_dataset_per_head(
             predictor, original_predict, ds_dir,
             val['emb_dict'], val['pid_md5'])
         out[ds]['dataset'] = ds
@@ -342,6 +353,36 @@ def main():
     with open(out_json, 'w') as f:
         json.dump(out, f, indent=2)
     print(f'\nWrote {out_json}')
+
+    # Optional: per-phage hit indicator TSV (for cross-model OR-union)
+    if args.per_phage_out:
+        import csv as _csv
+        out_tsv = args.per_phage_out
+        os.makedirs(os.path.dirname(out_tsv) or '.', exist_ok=True)
+        with open(out_tsv, 'w', newline='') as fh:
+            w = _csv.writer(fh, delimiter='\t')
+            w.writerow(['dataset', 'phage_id',
+                        'k_only_rank', 'o_only_rank', 'merged_rank',
+                        'k_hit@1', 'o_hit@1', 'merged_hit@1', 'or_hit@1'])
+            for ds, modes in per_phage_all.items():
+                # Union of phages seen across modes (should be the same set)
+                phages = set()
+                for m in MODES:
+                    phages.update(modes.get(m, {}).keys())
+                for phage in sorted(phages):
+                    k_r = modes.get('k_only', {}).get(phage)
+                    o_r = modes.get('o_only', {}).get(phage)
+                    m_r = modes.get('merged', {}).get(phage)
+                    k_hit = int(k_r is not None and k_r <= 1)
+                    o_hit = int(o_r is not None and o_r <= 1)
+                    m_hit = int(m_r is not None and m_r <= 1)
+                    or_hit = int(k_hit or o_hit)
+                    w.writerow([ds, phage,
+                                '' if k_r is None else k_r,
+                                '' if o_r is None else o_r,
+                                '' if m_r is None else m_r,
+                                k_hit, o_hit, m_hit, or_hit])
+        print(f'Wrote per-phage TSV: {out_tsv}')
 
 
 if __name__ == '__main__':
