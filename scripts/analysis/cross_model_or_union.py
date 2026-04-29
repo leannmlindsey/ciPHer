@@ -1,17 +1,18 @@
-"""Cross-model hybrid OR HR@1 — take K head from one model and O head
-from another, compute the OR-union HR@1 per dataset.
+"""Cross-model hybrid OR HR@k — take K head from one model and O head
+from another, compute the OR-union HR@k=1..20 per dataset.
 
 Mathematically equivalent to cipher's existing OR metric (which OR's
-K-only and O-only hit indicators within ONE model) — only difference
-is that here the K-only indicators come from one model's per-phage
-TSV and the O-only indicators come from another's.
+K-only and O-only rank indicators within ONE model) — only difference
+is that here the K-only ranks come from one model's per-phage TSV
+and the O-only ranks come from another's.
 
-Inputs: two per-phage TSVs from `per_head_strict_eval.py --per-phage-out`.
-Each TSV has columns:
-  dataset, phage_id, k_only_rank, o_only_rank, merged_rank,
-  k_hit@1, o_hit@1, merged_hit@1, or_hit@1
+Per-phage hybrid rank = min(K_rank_from_model_A, O_rank_from_model_B)
+HR@k_hybrid = fraction of phages with hybrid_rank ≤ k.
 
-Output: stdout summary + optional joined TSV.
+Outputs:
+  - stdout: per-dataset summary + PHL cross-tab
+  - --out-tsv: joined per-phage table
+  - --out-curves-json: HR@k=1..20 curves per dataset (for plot scripts)
 
 Usage:
   python scripts/analysis/cross_model_or_union.py \\
@@ -19,11 +20,13 @@ Usage:
       --o-tsv  results/analysis/per_phage/per_phage_sweep_prott5_mean_cl70.tsv \\
       --k-label 'la_v3_uat_prott5_xl_seg8' \\
       --o-label 'sweep_prott5_mean_cl70' \\
-      --out-tsv results/analysis/hybrid_or_la_K_sweep_O.tsv
+      --out-tsv results/analysis/hybrid_or_la_K_sweep_O.tsv \\
+      --out-curves-json results/analysis/hybrid_or_la_K_sweep_O_curves.json
 """
 
 import argparse
 import csv
+import json
 import os
 from collections import defaultdict
 
@@ -47,6 +50,9 @@ def main():
     p.add_argument('--o-label', default='O_model')
     p.add_argument('--out-tsv', default=None,
                    help='Optional joined per-phage TSV with hybrid OR column')
+    p.add_argument('--out-curves-json', default=None,
+                   help='Optional JSON: per-dataset hybrid HR@k=1..20 curves '
+                        '+ K-only and O-only curves (for plot scripts)')
     args = p.parse_args()
 
     k_data = load_tsv(args.k_tsv)
@@ -58,91 +64,125 @@ def main():
     print(f'Joined (intersection): {len(common)}')
     print()
 
-    # Per-dataset aggregation
+    # Per-dataset aggregation. We accumulate ranks so we can compute
+    # full HR@k=1..20 curves, not just k=1.
     DSS = ['CHEN', 'GORODNICHIV', 'UCSD', 'PBIP', 'PhageHostLearn']
-    per_ds = defaultdict(lambda: {'n':0,
-                                   'k_only_hit':0,
-                                   'o_only_hit':0,
-                                   'orig_or_k':0,
-                                   'orig_or_o':0,
-                                   'hybrid_or_hit':0,
-                                   'k_only':0, 'o_only':0,
-                                   'k_and_o':0, 'neither':0})
+    per_ds_ranks = defaultdict(lambda: {'phages':[], 'k_ranks':[], 'o_ranks':[],
+                                          'hybrid_ranks':[]})
+
+    def parse_rank(v):
+        try: return int(v)
+        except (TypeError, ValueError):
+            try: return int(float(v))
+            except (TypeError, ValueError): return None
 
     rows_out = []
     for key in common:
         ds, phage = key
         kr = k_data[key]
         orr = o_data[key]
-        # K hit from k-model's K head; O hit from o-model's O head
-        k_hit = int(kr['k_hit@1'] or 0)
-        o_hit = int(orr['o_hit@1'] or 0)
-        hybrid = int(k_hit or o_hit)
-        # For comparison: each model's own OR
-        k_orig_or = int(kr['or_hit@1'] or 0)
-        o_orig_or = int(orr['or_hit@1'] or 0)
+        k_rank = parse_rank(kr.get('k_only_rank'))   # K head rank from k-model
+        o_rank = parse_rank(orr.get('o_only_rank'))  # O head rank from o-model
+        # Hybrid rank: min over K and O ranks (None acts as +inf)
+        valid = [r for r in (k_rank, o_rank) if r is not None]
+        hybrid_rank = min(valid) if valid else None
+        per_ds_ranks[ds]['phages'].append(phage)
+        per_ds_ranks[ds]['k_ranks'].append(k_rank)
+        per_ds_ranks[ds]['o_ranks'].append(o_rank)
+        per_ds_ranks[ds]['hybrid_ranks'].append(hybrid_rank)
 
-        per_ds[ds]['n'] += 1
-        per_ds[ds]['k_only_hit'] += k_hit
-        per_ds[ds]['o_only_hit'] += o_hit
-        per_ds[ds]['hybrid_or_hit'] += hybrid
-        per_ds[ds]['orig_or_k'] += k_orig_or
-        per_ds[ds]['orig_or_o'] += o_orig_or
-        # Cross-tab: which catches what
-        if k_hit and o_hit: per_ds[ds]['k_and_o'] += 1
-        elif k_hit: per_ds[ds]['k_only'] += 1
-        elif o_hit: per_ds[ds]['o_only'] += 1
-        else: per_ds[ds]['neither'] += 1
-
+        # Per-row TSV output (hit@1 conveniences)
+        k_hit1 = int(k_rank is not None and k_rank <= 1)
+        o_hit1 = int(o_rank is not None and o_rank <= 1)
+        h_hit1 = int(hybrid_rank is not None and hybrid_rank <= 1)
         rows_out.append({
             'dataset': ds, 'phage_id': phage,
-            f'k_hit@1_{args.k_label}': k_hit,
-            f'o_hit@1_{args.o_label}': o_hit,
-            'hybrid_or_hit@1': hybrid,
-            f'orig_or_hit@1_{args.k_label}': k_orig_or,
-            f'orig_or_hit@1_{args.o_label}': o_orig_or,
+            f'k_only_rank_{args.k_label}': k_rank if k_rank is not None else '',
+            f'o_only_rank_{args.o_label}': o_rank if o_rank is not None else '',
+            'hybrid_rank': hybrid_rank if hybrid_rank is not None else '',
+            f'k_hit@1_{args.k_label}': k_hit1,
+            f'o_hit@1_{args.o_label}': o_hit1,
+            'hybrid_or_hit@1': h_hit1,
         })
 
-    # Print summary
-    print(f'Hybrid OR HR@1: K from {args.k_label}, O from {args.o_label}')
-    print('-' * 90)
-    print(f'{"dataset":<16} {"n":>4}  {"K_hit":>6} {"O_hit":>6} '
-          f'{"hybrid_OR":>10} {"K_OR_orig":>10} {"O_OR_orig":>10}')
-    tot = {'n':0, 'hybrid':0, 'k_or':0, 'o_or':0}
-    for ds in DSS:
-        d = per_ds[ds]
-        if d['n'] == 0:
-            continue
-        n = d['n']
-        khit = d['k_only_hit']/n
-        ohit = d['o_only_hit']/n
-        hyb = d['hybrid_or_hit']/n
-        kor = d['orig_or_k']/n
-        oor = d['orig_or_o']/n
-        print(f'{ds:<16} {n:>4}  {khit:>6.3f} {ohit:>6.3f} '
-              f'{hyb:>10.3f} {kor:>10.3f} {oor:>10.3f}')
-        tot['n'] += n
-        tot['hybrid'] += d['hybrid_or_hit']
-        tot['k_or'] += d['orig_or_k']
-        tot['o_or'] += d['orig_or_o']
-    print('-' * 90)
-    if tot['n']:
-        print(f'{"WEIGHTED":<16} {tot["n"]:>4}        '
-              f'         {tot["hybrid"]/tot["n"]:>10.3f} '
-              f'{tot["k_or"]/tot["n"]:>10.3f} {tot["o_or"]/tot["n"]:>10.3f}')
+    def hr_at_k(ranks, k):
+        n = len(ranks)
+        if n == 0: return None
+        return sum(1 for r in ranks if r is not None and r <= k) / n
 
-    # Cross-tab on PHL specifically (where the question matters most)
-    phl = per_ds.get('PhageHostLearn', {})
-    if phl.get('n'):
-        n = phl['n']
+    # Per-dataset HR@k curves
+    K_VALUES = list(range(1, 21))
+    curves = {}
+    for ds in DSS:
+        d = per_ds_ranks.get(ds, {'phages':[]})
+        n = len(d['phages'])
+        if n == 0: continue
+        curves[ds] = {
+            'n': n,
+            'k_only_hr@k':  {k: hr_at_k(d['k_ranks'], k) for k in K_VALUES},
+            'o_only_hr@k':  {k: hr_at_k(d['o_ranks'], k) for k in K_VALUES},
+            'hybrid_hr@k':  {k: hr_at_k(d['hybrid_ranks'], k) for k in K_VALUES},
+        }
+    # Phage-weighted overall (across all 5 datasets)
+    all_k = []
+    all_o = []
+    all_h = []
+    for ds in DSS:
+        d = per_ds_ranks.get(ds, {})
+        all_k.extend(d.get('k_ranks', []))
+        all_o.extend(d.get('o_ranks', []))
+        all_h.extend(d.get('hybrid_ranks', []))
+    if all_h:
+        curves['overall'] = {
+            'n': len(all_h),
+            'k_only_hr@k':  {k: hr_at_k(all_k, k) for k in K_VALUES},
+            'o_only_hr@k':  {k: hr_at_k(all_o, k) for k in K_VALUES},
+            'hybrid_hr@k':  {k: hr_at_k(all_h, k) for k in K_VALUES},
+        }
+
+    # Print HR@1 summary
+    print(f'Hybrid OR HR@1: K from {args.k_label}, O from {args.o_label}')
+    print('-' * 80)
+    print(f'{"dataset":<16} {"n":>4}  {"K_hit@1":>8} {"O_hit@1":>8} {"hybrid@1":>10}')
+    for ds in DSS + ['overall']:
+        if ds not in curves: continue
+        c = curves[ds]
+        n = c['n']
+        khit = c['k_only_hr@k'][1]
+        ohit = c['o_only_hr@k'][1]
+        hyb  = c['hybrid_hr@k'][1]
+        label = ds if ds != 'overall' else 'WEIGHTED'
+        print(f'{label:<16} {n:>4}  {khit:>8.3f} {ohit:>8.3f} {hyb:>10.3f}')
+
+    # Cross-tab on PHL specifically
+    phl = per_ds_ranks.get('PhageHostLearn', {'phages':[]})
+    if phl['phages']:
+        k_and_o = sum(1 for k, o in zip(phl['k_ranks'], phl['o_ranks'])
+                      if k is not None and k <= 1 and o is not None and o <= 1)
+        k_only = sum(1 for k, o in zip(phl['k_ranks'], phl['o_ranks'])
+                     if (k is not None and k <= 1) and not (o is not None and o <= 1))
+        o_only = sum(1 for k, o in zip(phl['k_ranks'], phl['o_ranks'])
+                     if not (k is not None and k <= 1) and (o is not None and o <= 1))
+        neither = len(phl['phages']) - k_and_o - k_only - o_only
         print()
-        print(f'PhageHostLearn cross-tab (n={n}):')
-        print(f'  {args.k_label} K catches AND {args.o_label} O catches: {phl["k_and_o"]:>3}  '
-              f'({100*phl["k_and_o"]/n:.0f}%)')
-        print(f'  {args.k_label} K only catches:                          {phl["k_only"]:>3}')
-        print(f'  {args.o_label} O only catches:                          {phl["o_only"]:>3}')
-        print(f'  Neither catches:                                        {phl["neither"]:>3}')
-        print(f'  → hybrid OR @1 = {(phl["k_and_o"]+phl["k_only"]+phl["o_only"])/n:.3f}')
+        print(f'PhageHostLearn cross-tab (n={len(phl["phages"])}):')
+        print(f'  K hits AND O hits:  {k_and_o:>3}')
+        print(f'  K only:             {k_only:>3}')
+        print(f'  O only:             {o_only:>3}')
+        print(f'  neither:            {neither:>3}')
+        print(f'  → hybrid OR @1 = {(k_and_o + k_only + o_only) / len(phl["phages"]):.3f}')
+
+    # Optional curves JSON for plot scripts
+    if args.out_curves_json:
+        os.makedirs(os.path.dirname(args.out_curves_json) or '.', exist_ok=True)
+        out = {
+            'k_label': args.k_label,
+            'o_label': args.o_label,
+            'datasets': curves,
+        }
+        with open(args.out_curves_json, 'w') as fh:
+            json.dump(out, fh, indent=2)
+        print(f'\nWrote curves JSON: {args.out_curves_json}')
 
     # Optional: write joined TSV
     if args.out_tsv:

@@ -35,6 +35,7 @@ Usage:
 """
 
 import csv
+import json
 import os
 from collections import defaultdict
 
@@ -49,6 +50,13 @@ HARVEST_CSV = 'results/experiment_log.csv'
 
 CIPHER_RUN_NAME = 'sweep_prott5_mean_cl70'  # top performer with 5/5 K coverage
 DATASETS = ['CHEN', 'GORODNICHIV', 'UCSD', 'PBIP', 'PhageHostLearn']
+
+# Optional hybrid OR curves (cross-model: K from one run + O from another)
+HYBRID_CURVES_JSON = ('results/analysis/'
+                       'hybrid_or_la_K_sweep_O_curves.json')
+HYBRID_COLOR = '#6a3d9a'
+HYBRID_LW    = 2.6
+HYBRID_LABEL = 'cipher hybrid OR (LA K + MLP O)'
 
 OUT_SVG = 'results/figures/recall_at_k_vs_competitors.svg'
 
@@ -69,6 +77,19 @@ def load_agent6_tsv():
             hrk = {int(k.split('@')[1]): float(row[k])
                     for k in row if k.startswith('R@')}
             out[(ds, model)] = {'n_phages': n, 'hr_at_k': hrk}
+    return out
+
+
+def load_hybrid_curves(path):
+    """Load cross_model_or_union.py output. Returns {dataset: {k: hr}}
+    for the hybrid-OR mode. None if missing."""
+    if not path or not os.path.exists(path):
+        return None
+    with open(path) as fh:
+        d = json.load(fh)
+    out = {}
+    for ds, c in d.get('datasets', {}).items():
+        out[ds] = {int(k): v for k, v in c.get('hybrid_hr@k', {}).items()}
     return out
 
 
@@ -139,6 +160,9 @@ def main():
     agent6 = load_agent6_tsv()
     cipher_phl, phl_n = cipher_phl_curves()
     cipher_overall_run, cipher_overall = cipher_overall_curves()
+    hybrid = load_hybrid_curves(HYBRID_CURVES_JSON)
+    if hybrid is None:
+        print(f'(no hybrid curves at {HYBRID_CURVES_JSON} — rendering without)')
 
     # Tropi weighted-overall curves (across 5 datasets, weighted by n_phages)
     tropi_seq_w = weighted_overall_from_agent6(agent6, 'TropiSEQ')
@@ -176,6 +200,12 @@ def main():
                  else model)
         ax.plot(ks, ys, color=tropi_color[model], lw=tropi_lw[model],
                 marker='s', markersize=3.5, label=label)
+    # Hybrid OR curve on PHL (purple)
+    if hybrid is not None and 'PhageHostLearn' in hybrid:
+        ys = [hybrid['PhageHostLearn'].get(k) for k in ks]
+        if not all(v is None for v in ys):
+            ax.plot(ks, ys, color=HYBRID_COLOR, lw=HYBRID_LW,
+                    marker='D', markersize=4.5, label=HYBRID_LABEL)
 
     n_phl = agent6.get(('PhageHostLearn', 'TropiSEQ'), {}).get('n_phages', '?')
     ax.set_title(f'PhageHostLearn (n={n_phl} phages)', fontsize=12, fontweight='bold')
@@ -206,6 +236,12 @@ def main():
         label = ('TropiSEQ ∪ TropiGAT (combined)' if model == 'Combined' else model)
         ax.plot(ks, ys, color=tropi_color[model], lw=tropi_lw[model],
                 marker='s', markersize=3.5, label=label)
+    # Hybrid OR curve overall (purple)
+    if hybrid is not None and 'overall' in hybrid:
+        ys = [hybrid['overall'].get(k) for k in ks]
+        if not all(v is None for v in ys):
+            ax.plot(ks, ys, color=HYBRID_COLOR, lw=HYBRID_LW,
+                    marker='D', markersize=4.5, label=HYBRID_LABEL)
 
     total_n = sum(agent6.get((ds, 'TropiSEQ'), {}).get('n_phages', 0)
                   for ds in DATASETS)

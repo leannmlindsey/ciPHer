@@ -18,6 +18,7 @@ Usage:
 """
 
 import csv
+import json
 import os
 from collections import defaultdict
 
@@ -30,6 +31,17 @@ AGENT6_TSV = ('/Users/leannmlindsey/WORK/PHI_TSP/cipher-depolymerase-domain/'
               'data/recall_at_k_4way/recall_at_k_4way.tsv')
 HARVEST_CSV = 'results/experiment_log.csv'
 CIPHER_RUN_NAME = 'sweep_prott5_mean_cl70'
+
+# Optional hybrid OR curves (cross-model: K from one run + O from another).
+# Set HYBRID_CURVES_JSON to the path of cross_model_or_union.py's
+# --out-curves-json output to render an additional "cipher hybrid OR"
+# curve on each panel.
+HYBRID_CURVES_JSON = ('results/analysis/'
+                       'hybrid_or_la_K_sweep_O_curves.json')
+
+HYBRID_COLOR = '#6a3d9a'   # dark purple
+HYBRID_LW    = 2.6
+HYBRID_LABEL = 'cipher hybrid OR (LA K + MLP O)'
 DATASETS = ['CHEN', 'GORODNICHIV', 'UCSD', 'PBIP', 'PhageHostLearn']
 
 OUT_SVG = 'results/figures/recall_at_k_per_dataset.svg'
@@ -113,7 +125,25 @@ def weighted_overall_from_agent6(agent6, model):
     return {k: v / den for k, v in num.items()}
 
 
-def plot_panel(ax, title, n, cipher_modes, tropi_models, footnote=None):
+def load_hybrid_curves(path):
+    """Load cross_model_or_union.py output. Returns {dataset_or_overall:
+    {mode: {k: hr}}} for the hybrid model. None if file absent."""
+    if not path or not os.path.exists(path):
+        return None
+    with open(path) as fh:
+        d = json.load(fh)
+    out = {}
+    for ds, c in d.get('datasets', {}).items():
+        out[ds] = {
+            'k_only': {int(k): v for k, v in c.get('k_only_hr@k', {}).items()},
+            'o_only': {int(k): v for k, v in c.get('o_only_hr@k', {}).items()},
+            'hybrid': {int(k): v for k, v in c.get('hybrid_hr@k', {}).items()},
+        }
+    return out
+
+
+def plot_panel(ax, title, n, cipher_modes, tropi_models, footnote=None,
+               hybrid_curve=None):
     """Draw one panel. cipher_modes={mode:{k:v}}; tropi_models={model:{k:v}}."""
     ks = list(range(1, 21))
     for mode in ('k_only', 'o_only', 'or'):
@@ -130,6 +160,13 @@ def plot_panel(ax, title, n, cipher_modes, tropi_models, footnote=None):
             continue
         ax.plot(ks, ys, color=TROPI_COLOR[model], lw=TROPI_LW[model],
                 marker='s', markersize=3.5, label=TROPI_LABEL[model])
+    # Hybrid OR curve (cross-model: K from LA + O from MLP) — purple,
+    # diamond markers; renders only when hybrid_curve has data.
+    if hybrid_curve and 'hybrid' in hybrid_curve:
+        ys = [hybrid_curve['hybrid'].get(k) for k in ks]
+        if not all(v is None for v in ys):
+            ax.plot(ks, ys, color=HYBRID_COLOR, lw=HYBRID_LW,
+                    marker='D', markersize=4.5, label=HYBRID_LABEL)
     n_str = f'n={n}' if n is not None else 'n=?'
     ax.set_title(f'{title} ({n_str} phages)', fontsize=11, fontweight='bold')
     ax.set_xlabel('k')
@@ -154,6 +191,10 @@ def main():
         print(f'ERROR: harvest CSV has no row for run_name={CIPHER_RUN_NAME}')
         return
 
+    hybrid = load_hybrid_curves(HYBRID_CURVES_JSON)
+    if hybrid is None:
+        print(f'(no hybrid curves at {HYBRID_CURVES_JSON} — rendering without hybrid)')
+
     tropi_overall = {m: weighted_overall_from_agent6(agent6, m)
                      for m in ('TropiSEQ', 'TropiGAT', 'Combined')}
 
@@ -176,7 +217,12 @@ def main():
             if ds == 'GORODNICHIV':
                 footnote = ('no O labels in publication;\n'
                             'cipher OR = K (no O contribution)')
-        plot_panel(ax, title, n, cipher.get(ds, {}), tropi_models, footnote=footnote)
+        # Hybrid for this panel: PHL-overall use 'PhageHostLearn'/'overall' keys
+        hybrid_curve = None
+        if hybrid is not None:
+            hybrid_curve = hybrid.get(ds if ds != 'overall' else 'overall')
+        plot_panel(ax, title, n, cipher.get(ds, {}), tropi_models,
+                   footnote=footnote, hybrid_curve=hybrid_curve)
         if i % 3 == 0:
             ax.set_ylabel('Recall@k (phage-level any-hit, strict denom)')
 
@@ -189,7 +235,7 @@ def main():
                 seen_labels[lab] = h
     # Order: cipher (K, O, OR) first, then Tropi (SEQ, GAT, Combined)
     desired_order = [CIPHER_LABEL['k_only'], CIPHER_LABEL['o_only'],
-                     CIPHER_LABEL['or'],
+                     CIPHER_LABEL['or'], HYBRID_LABEL,
                      TROPI_LABEL['TropiSEQ'], TROPI_LABEL['TropiGAT'],
                      TROPI_LABEL['Combined']]
     ordered = [(lab, seen_labels[lab]) for lab in desired_order
