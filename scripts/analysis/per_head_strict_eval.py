@@ -237,6 +237,15 @@ def evaluate_dataset_per_head(predictor, original_predict, dataset_dir,
                    or (mode_phage_anyhit['o_only'].get(phage) is not None
                        and mode_phage_anyhit['o_only'][phage] <= k)
                    ) / max(n_strict_phage, 1)
+    def _hr_or_host_anyhit(k):
+        # Host→phage OR ceiling: per host, did K-only OR O-only land
+        # at least one positive phage at rank ≤ k?
+        return sum(1 for host in hosts_with_strict_pos
+                   if (mode_host_anyhit['k_only'].get(host) is not None
+                       and mode_host_anyhit['k_only'][host] <= k)
+                   or (mode_host_anyhit['o_only'].get(host) is not None
+                       and mode_host_anyhit['o_only'][host] <= k)
+                   ) / max(n_strict_host, 1)
 
     out = {
         'n_strict_pair': n_strict_pair,
@@ -254,9 +263,12 @@ def evaluate_dataset_per_head(predictor, original_predict, dataset_dir,
             'hr_at_k': {k: _hr_pair(mode, k) for k in range(1, max_k + 1)},
         }
     out['or'] = {
-        'hr_at_k_any_hit': {k: _hr_or_phage_anyhit(k) for k in range(1, max_k + 1)},
-        'hr_at_k_pair':    {k: _hr_or_pair(k) for k in range(1, max_k + 1)},
-        'hr_at_k':         {k: _hr_or_pair(k) for k in range(1, max_k + 1)},
+        'hr_at_k_any_hit':       {k: _hr_or_phage_anyhit(k) for k in range(1, max_k + 1)},
+        'hr_at_k_pair':          {k: _hr_or_pair(k) for k in range(1, max_k + 1)},
+        'hr_at_k':               {k: _hr_or_pair(k) for k in range(1, max_k + 1)},
+        # Host→phage OR ceiling — same union logic as phage→host OR
+        # but on the reverse direction.
+        'hr_at_k_phage_any_hit': {k: _hr_or_host_anyhit(k) for k in range(1, max_k + 1)},
     }
 
     # Per-phage rank data — for cross-model OR-union experiments.
