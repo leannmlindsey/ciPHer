@@ -46,7 +46,7 @@ V4_ADDITIONS_FAA="${V4_DIR}/candidates_v4_additions.faa"
 
 # Existing cipher candidate embeddings (we'll merge v4 additions on top)
 EXISTING_PROTT5_MEAN_NPZ="/projects/bfzj/llindsey1/RBP_Structural_Similarity/output/embeddings_prott5/candidates_embeddings_md5.npz"
-EXISTING_PROTT5_SEG8_NPZ="/work/hdd/bfzj/llindsey1/candidates_prott5_xl_seg8.npz"
+EXISTING_PROTT5_SEG8_NPZ="/work/hdd/bfzj/llindsey1/embeddings/prott5_xl_segments8/candidates_prott5_xl_segments8_md5.npz"
 
 # v4 additions embedding outputs (just the 1,067 new seqs)
 V4_EMB_DIR="/work/hdd/bfzj/llindsey1/v4_embeddings"
