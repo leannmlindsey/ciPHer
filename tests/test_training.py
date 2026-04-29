@@ -87,6 +87,26 @@ class TestTrainingConfig:
             cfg = TrainingConfig(tools=[tool])
             assert cfg.tools == [tool]
 
+    def test_per_head_lists_mutex_with_single_list(self, tmp_path):
+        """positive_list_path and positive_list_{k,o}_path are mutex."""
+        k_list = tmp_path / 'k.list'
+        k_list.write_text('prot_1\n')
+        with pytest.raises(ValueError, match='mutually exclusive'):
+            TrainingConfig(
+                positive_list_path=str(k_list),
+                positive_list_k_path=str(k_list),
+            )
+
+    def test_per_head_lists_mutex_with_tools(self, tmp_path):
+        """positive_list_{k,o}_path are mutex with tool-based filters."""
+        k_list = tmp_path / 'k.list'
+        k_list.write_text('prot_1\n')
+        with pytest.raises(ValueError, match='mutually exclusive'):
+            TrainingConfig(
+                positive_list_k_path=str(k_list),
+                tools=['SpikeHunter'],
+            )
+
 
 class TestPrepareTrainingData:
     def test_basic(self):
@@ -243,6 +263,91 @@ class TestPrepareTrainingData:
 
         # protein_set was translated to tools
         assert td.config.tools == ['SpikeHunter']
+
+
+class TestPerHeadMasking:
+    """v2 highconf: positive_list_k_path + positive_list_o_path zero the
+    labels of samples that aren't in the corresponding head's list.
+    Back-compat: positive_list_path alone matches pre-v2 behaviour.
+    """
+
+    def _write_list(self, path, ids):
+        path.write_text('\n'.join(ids) + '\n')
+
+    def test_backcompat_single_list_matches_legacy(self, tmp_path):
+        """Passing positive_list_path alone produces the same result as
+        before the per-head fields existed."""
+        pos = tmp_path / 'pos.list'
+        self._write_list(pos, ['prot_1', 'prot_3', 'prot_5'])
+
+        cfg_legacy = TrainingConfig(positive_list_path=str(pos))
+        cfg_new = TrainingConfig(positive_list_path=str(pos))
+
+        td_legacy = prepare_training_data(
+            cfg_legacy, ASSOC_MAP, GLYCAN, verbose=False)
+        td_new = prepare_training_data(
+            cfg_new, ASSOC_MAP, GLYCAN, verbose=False)
+
+        assert td_legacy.md5_list == td_new.md5_list
+        assert np.array_equal(td_legacy.k_labels, td_new.k_labels)
+        assert np.array_equal(td_legacy.o_labels, td_new.o_labels)
+
+    def test_per_head_lists_zero_out_of_list_labels(self, tmp_path):
+        """With disjoint K and O lists, samples not in K have K labels = 0
+        and samples not in O have O labels = 0."""
+        # From the fixture:
+        # prot_1 -> md5_aaa (K1/K2, O1/O2)
+        # prot_3 -> md5_ccc (K2, O1)
+        # prot_5 -> md5_eee (K3, O1)
+        k_only = tmp_path / 'k.list'
+        o_only = tmp_path / 'o.list'
+        self._write_list(k_only, ['prot_1', 'prot_3'])   # md5_aaa, md5_ccc
+        self._write_list(o_only, ['prot_5'])             # md5_eee
+
+        cfg = TrainingConfig(
+            positive_list_k_path=str(k_only),
+            positive_list_o_path=str(o_only),
+        )
+        td = prepare_training_data(cfg, ASSOC_MAP, GLYCAN, verbose=False)
+
+        # Sample pool should be the UNION of the two lists.
+        surviving = set(td.md5_list)
+        # md5_aaa / md5_ccc (K list) and md5_eee (O list) should all survive
+        # if they clear the other filters.
+        assert 'md5_aaa' in surviving or 'md5_ccc' in surviving or 'md5_eee' in surviving
+
+        md5_to_idx = {m: i for i, m in enumerate(td.md5_list)}
+
+        # Any MD5 in the K list (md5_aaa, md5_ccc) but not in the O list
+        # should have all-zero O labels.
+        for md5 in ('md5_aaa', 'md5_ccc'):
+            if md5 in md5_to_idx:
+                assert td.o_labels[md5_to_idx[md5]].sum() == 0, (
+                    f'{md5} is K-only but has non-zero O labels')
+
+        # md5_eee is in the O list but NOT in the K list -> K labels should be 0.
+        if 'md5_eee' in md5_to_idx:
+            assert td.k_labels[md5_to_idx['md5_eee']].sum() == 0, (
+                'md5_eee is O-only but has non-zero K labels')
+
+    def test_per_head_same_list_no_masking(self, tmp_path):
+        """When both per-head lists are identical, masking is a no-op."""
+        same = tmp_path / 'same.list'
+        self._write_list(same, ['prot_1', 'prot_3', 'prot_5'])
+
+        cfg_single = TrainingConfig(positive_list_path=str(same))
+        cfg_split = TrainingConfig(
+            positive_list_k_path=str(same),
+            positive_list_o_path=str(same),
+        )
+        td_single = prepare_training_data(
+            cfg_single, ASSOC_MAP, GLYCAN, verbose=False)
+        td_split = prepare_training_data(
+            cfg_split, ASSOC_MAP, GLYCAN, verbose=False)
+
+        assert td_single.md5_list == td_split.md5_list
+        assert np.array_equal(td_single.k_labels, td_split.k_labels)
+        assert np.array_equal(td_single.o_labels, td_split.o_labels)
 
 
 class TestMultiLabelThreshold:

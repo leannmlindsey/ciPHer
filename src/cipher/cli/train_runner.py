@@ -81,6 +81,24 @@ def apply_overrides(config, args):
         config['experiment'].pop('tools', None)
         config['experiment'].pop('exclude_tools', None)
         config['experiment'].pop('protein_set', None)
+        # Also clear per-head lists from base config — single-list mode wins.
+        config['experiment'].pop('positive_list_k_path', None)
+        config['experiment'].pop('positive_list_o_path', None)
+    if args.positive_list_k is not None or args.positive_list_o is not None:
+        # Per-head v2 mode. Clear the legacy single-list + tool filters.
+        exp = config.setdefault('experiment', {})
+        if args.positive_list_k is not None:
+            exp['positive_list_k_path'] = args.positive_list_k
+        if args.positive_list_o is not None:
+            exp['positive_list_o_path'] = args.positive_list_o
+        exp.pop('positive_list_path', None)
+        exp.pop('tools', None)
+        exp.pop('exclude_tools', None)
+        exp.pop('protein_set', None)
+    if args.heads is not None:
+        config.setdefault('training', {})['heads'] = args.heads
+    if args.split_style is not None:
+        config.setdefault('training', {})['split_style'] = args.split_style
     if args.min_sources is not None:
         config.setdefault('experiment', {})['min_sources'] = args.min_sources
     if args.max_k_types is not None:
@@ -117,6 +135,20 @@ def apply_overrides(config, args):
         config.setdefault('model', {})['pooler_type'] = args.pooler_type
     if args.c_terminal_crop is not None:
         config.setdefault('model', {})['c_terminal_crop'] = args.c_terminal_crop
+
+    # Contrastive-encoder-specific overrides (ignored by other models)
+    if args.lambda_k is not None:
+        config.setdefault('training', {})['lambda_k'] = args.lambda_k
+    if args.lambda_o is not None:
+        config.setdefault('training', {})['lambda_o'] = args.lambda_o
+    if args.arcface_margin is not None:
+        config.setdefault('arcface', {})['margin'] = args.arcface_margin
+    if args.arcface_scale is not None:
+        config.setdefault('arcface', {})['scale'] = args.arcface_scale
+    if args.sampler_hard_negative_mining is not None:
+        config.setdefault('sampler', {})['hard_negative_mining'] = args.sampler_hard_negative_mining
+    if args.sampler_hard_negative_start_epoch is not None:
+        config.setdefault('sampler', {})['hard_negative_start_epoch'] = args.sampler_hard_negative_start_epoch
 
     # Embedding overrides
     if args.embedding_type is not None:
@@ -384,6 +416,34 @@ Examples:
     parser.add_argument('--protein_set',
                         help='DEPRECATED: use --tools/--exclude_tools. '
                              'Values: all_glycan_binders, tsp_only, rbp_only')
+    parser.add_argument('--positive_list_k',
+                        help='v2 per-head: positive list for the K head. '
+                             'When combined with --positive_list_o, training '
+                             'samples are the UNION of both lists; each '
+                             'sample contributes only to the head-loss for '
+                             'the list it appears in (label-level masking). '
+                             'Mutex with --positive_list, --tools, '
+                             '--exclude_tools, --protein_set.')
+    parser.add_argument('--positive_list_o',
+                        help='v2 per-head: positive list for the O head. '
+                             'See --positive_list_k.')
+    parser.add_argument('--heads', choices=('both', 'k', 'o'),
+                        default=None,
+                        help='Which head(s) to train: both (default), k, or o. '
+                             'attention_mlp skips the other head\'s training '
+                             'loop; contrastive_encoder forces the other '
+                             'lambda to 0. Orthogonal to the positive-list '
+                             'flags — you can set per-head lists and still '
+                             'train only one head.')
+    parser.add_argument('--split-style', choices=('independent', 'canonical'),
+                        default=None,
+                        help='How to split into train/val/test for the K and '
+                             'O heads. "independent" (default): K and O get '
+                             'separate stratified splits with seeds (s, s+1). '
+                             '"canonical" (matches the old klebsiella '
+                             'pipeline): one shared split keyed on primary K '
+                             '(with O-fallback when K is null/N/A); both heads '
+                             'see the same train/val/test partition.')
     parser.add_argument('--positive_list',
                         help='Path to a positive-list file (one protein ID per line). '
                              'Filters candidates to these IDs only. Mutually '
@@ -440,6 +500,31 @@ Examples:
                              '0 / unset means no cropping. '
                              f'(default: {fmt(d_model.get("c_terminal_crop"), "no crop")})')
 
+    # Contrastive-encoder-specific (ignored by other models)
+    d_train = base_cfg.get('training', {})
+    d_arc = base_cfg.get('arcface', {})
+    d_samp = base_cfg.get('sampler', {})
+    parser.add_argument('--lambda_k', type=float,
+                        help=f'Contrastive encoder: K-head loss weight. Set 0 to disable. '
+                             f'(default: {fmt(d_train.get("lambda_k"))})')
+    parser.add_argument('--lambda_o', type=float,
+                        help=f'Contrastive encoder: O-head loss weight. Set 0 to disable. '
+                             f'(default: {fmt(d_train.get("lambda_o"))})')
+    parser.add_argument('--arcface_margin', type=float,
+                        help=f'Contrastive encoder: ArcFace additive angular margin '
+                             f'(default: {fmt(d_arc.get("margin"))})')
+    parser.add_argument('--arcface_scale', type=float,
+                        help=f'Contrastive encoder: ArcFace scale '
+                             f'(default: {fmt(d_arc.get("scale"))})')
+    parser.add_argument('--sampler_hard_negative_mining',
+                        type=lambda s: s.lower() in ('1', 'true', 'yes'),
+                        help='Contrastive encoder: enable prototype-based hard-negative '
+                             'class sampling in PK sampler (true/false).')
+    parser.add_argument('--sampler_hard_negative_start_epoch', type=int,
+                        help=f'Contrastive encoder: epoch to switch from uniform to '
+                             f'hard-negative class sampling. '
+                             f'(default: {fmt(d_samp.get("hard_negative_start_epoch"))})')
+
     # Embedding
     parser.add_argument('--embedding_type',
                         help=f'Embedding type label: esm2_650m, kmer_murphy8_k5, etc. '
@@ -491,6 +576,15 @@ Examples:
         parser.error(
             '--positive_list is mutually exclusive with --tools, '
             '--exclude_tools, and --protein_set.')
+    if args.positive_list and (args.positive_list_k or args.positive_list_o):
+        parser.error(
+            '--positive_list is mutually exclusive with '
+            '--positive_list_k / --positive_list_o. Use one mode or the other.')
+    if (args.positive_list_k or args.positive_list_o) and (
+            args.tools or args.exclude_tools or args.protein_set):
+        parser.error(
+            '--positive_list_k / --positive_list_o are mutually exclusive '
+            'with --tools, --exclude_tools, and --protein_set.')
 
     project_root = find_project_root()
 

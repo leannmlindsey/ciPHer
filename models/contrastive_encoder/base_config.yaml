@@ -39,6 +39,16 @@ sampler:
   K: 8
   # null means "as many batches as fit one pass over training samples".
   num_batches_per_epoch: null
+  # Hard-negative mining: reweight class-sampling probability by
+  # prototype-similarity-based confusability. Disabled by default.
+  hard_negative_mining: false
+  # Don't start HN mining until the encoder has learned something.
+  hard_negative_start_epoch: 10
+  # Recompute prototypes + weights every N epochs (from start_epoch onward).
+  hard_negative_update_every: 5
+  # Softmax temperature over hardness scores. Lower = sharper peaks,
+  # heavier bias toward hardest classes.
+  hard_negative_temperature: 1.0
 
 data:
   association_map: data/training_data/metadata/host_phage_protein_map.tsv

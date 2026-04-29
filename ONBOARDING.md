@@ -314,6 +314,23 @@ Four blocks control different aspects of the run:
 - UCSD phages infect 15-25 K-types each
 - Single-label models are structurally unable to handle these
 
+### 4a – 4d. Durable findings (see `notes/findings/`)
+
+As of 2026-04-23 the long-form content previously written inline in
+§§4a–4d has moved to `notes/findings/`, where findings have their own
+structured format (evidence, mechanism, implications, provenance). This
+section keeps a summary index; read the linked file for full detail.
+
+| # | Finding | File |
+|---|---|---|
+| 4a | **PHL ceiling is a training-label domain shift.** Training K-labels come from Kaptive on the prophage-source host; PHL K-labels come from Kaptive on the lytic-target host. Different genomes → 85% K-label disagreement at ≥ 95% AA identity. No pLM, architecture change, or cluster-purity filter can recover from this. Recommendations for how to address are discussed in the finding file and not yet a committed team plan. | `notes/findings/2026-04-22_phl_label_domain_shift.md` |
+| 4a-symptom | **PHL ceiling presents as a representation-granularity problem.** (Symptom-level finding; mechanism is 4a above.) ESM-2 maps PHL proteins to near-identical training neighbours (cos ≥ 0.99 for 90.6%), but those neighbours carry the wrong K-type 89% of the time. | `notes/findings/2026-04-22_phl_ceiling_representation_granularity.md` |
+| 4b | **K and O heads carry largely independent signal on PHL (A7).** On the best v1 run, K-only PHL = 0.130, O-only = 0.164, combined = 0.188 — losing either head costs 30–40%. Dropping the O head as "noise" is falsified. Motivates the per-head v2 dataset design. | `notes/findings/2026-04-22_k_and_o_heads_independent_on_phl.md` |
+| 4c | **Per-head v2 training lists.** Two deliverable recipes (strict cl95, UAT maximal), each with independent K and O lists, under `data/training_data/metadata/highconf_v2/`. Motivated by 4b. Enabled by the 2026-04-22 loss-masking refactor (`--positive_list_k` / `--positive_list_o` on `cipher-train`). See `notes/handoff_all_models_from_agent4.md` + `notes/paths.md`. | (dataset, not a finding) |
+| 4d | **Highconf v1 filter imposes a structural HR@1 ceiling on some datasets.** The v1 list drops ~60% of K-classes and ~36% of O-classes from the training label space. GORODNICHIV has zero scorable pairs under every v1 highconf run as a result. v2 widens coverage back to 161/22. | `notes/findings/2026-04-22_highconf_v1_class_restriction_ceiling.md` |
+| 4e | **Per-dataset optimal eval mode is predicted by phage breadth.** K-only beats default z-score combined eval on every dataset; O-only wins in specific cells (CHEN host, PBIP rank_phages under v2, UCSD rank_phages). A single eval mode cannot be optimal everywhere. Team-best PHL rh@1 = **0.232** (attention_mlp K-only on v1) — not 0.188 combined. | `notes/findings/2026-04-23_head_eval_phage_breadth.md` |
+| 4f | **8-tool RBP detection pipeline has false negatives concentrated on PHL-novel K-types.** ~12% of PHL proteins have a better homolog in the `NOT_flagged_by_any_tool` phold bucket than in `pipeline_positive` — gaps reach +60 pp%. Independent of and additive with the label-shift mechanism (4a). Cheap fix: bootstrap training from PHL's MMseqs-similar tool-missed homologs. | `notes/findings/2026-04-23_rbp_tool_filter_false_negatives.md` |
+
 ### 5. Best models so far (rank-hosts HR@1 per validation dataset)
 
 The following table summarizes the best-performing runs under the ciPHer
@@ -350,6 +367,7 @@ the cross-dataset spread for each model.
 | `sweep_posList_kmer_li10_k5_cl70` | positive_list, cluster-70 | 0.275 | 1.000 | 0.100 | 0.581 | 0.160 | 0.296 | 0.416 | 0.372 | 0.628 | 0.411 |
 | `concat_prott5_mean+kmer_li10_k5` | tools, random | 0.275 | 1.000 | 0.096 | 0.737 | **0.169** | 0.358 | 0.511 | 0.394 | 0.632 | 0.386 |
 | `concat_posList_esm2_3b_mean+kmer_li10_k5_cl70` | positive_list, cluster-70 | 0.275 | 1.000 | 0.081 | 0.647 | 0.163 | 0.359 | 0.453 | 0.384 | 0.603 | 0.397 |
+| `highconf_pipeline_K_prott5_mean` (2026-04-22, **current best PHL**) | highconf v1 (pipeline_positive_K, 9,774 MD5s, 63 K-classes) | 0.188 | 0.000 (n=0) | 0.019 | 0.740 | **0.188** | 0.286 | 0.399 | 0.296 | — | — |
 
 CHEN and GORODNICHIV HR@1 are saturated for the majority of runs (CHEN
 contains three phages; GORODNICHIV contains three phages and a single
@@ -378,6 +396,14 @@ between models.
   list and switching random downsampling to cluster-stratified sampling
   at 70% identity consistently lifts PhageHostLearn HR@1 by 30–45%
   relative to the baseline without degrading overall performance.
+- **Highconf v1 + ProtT5 mean + attention_mlp** (bottom row) broke the
+  0.17 PhageHostLearn ceiling for the first time at rh@1 = 0.188, but
+  the v1 filter drops GORODNICHIV entirely (see §4d) and constrains
+  the K-class label space to 64 of ~161 classes. Per §4b, K-only and
+  O-only both contribute to this number; dropping either head would
+  cost 30–40%. The v2 per-head lists (§4c) are the successor design
+  intended to widen coverage back to all classes while preserving the
+  per-axis purity that gave v1 its lift.
 
 ## Existing Code Reference
 
@@ -644,3 +670,103 @@ be coordinated across branches before editing:
 Changes to any of these should be minimal, backward-compatible (per the
 rules above), and ideally batched into a single PR rather than spread
 across several model branches.
+
+### Cross-agent communication via `notes/`
+
+Since agents work in separate worktrees / repos, the `notes/` directory
+on `main` is the shared surface for durable, structured hand-offs.
+It is tracked in git and reviewed with the same care as documentation.
+
+#### Directory contents
+
+| Path | Purpose | Lifetime |
+|---|---|---|
+| `notes/findings/` | **Durable project findings** — results of investigation we've established as true, with evidence and mechanism. New findings land here as dated files; index in `notes/findings/README.md`. This is where long-lived knowledge lives, not in handoffs. | durable, append-only |
+| `notes/paths.md` | Single source of truth for canonical file paths on Delta-AI (repo, training inputs, training embeddings by variant, validation embeddings, extraction outputs). Updated whenever a new artefact lands. Every SLURM script still reads paths from env-overridable variables, but `paths.md` is what humans consult. | maintained |
+| `notes/tomorrow.md` | Rolling list of parked experiments carried over from the previous day, with rationale and proposed scripts. Cross off when done. | rolling |
+| `notes/model_improvement_options.md` | Tiered design doc for strategies to raise PHL rh@1 past the current ceiling. New strategies added here before any code is written, so the plan is visible to all agents. | periodic |
+| `notes/handoff_<audience>_<topic>.md` | Handoff notes between agents (described below). | ephemeral |
+
+#### Handoff file naming
+
+Three patterns, in practice:
+
+- **To another specific agent, from me:** `handoff_agent<N>_<topic>.md`
+  Example: `handoff_agent2_light_attention.md` (agent 1 to agent 2 about
+  the light-attention branch).
+- **To me, from another agent:** `handoff_agent1_from_agent<N>.md`
+  Example: `handoff_agent1_from_agent4.md` (agent 4 to agent 1 about
+  the per-head dataset refactor).
+- **Broadcast (to every modelling agent):** `handoff_all_models_from_agent<N>.md`
+  Example: `handoff_all_models_from_agent4.md` (dataset v2 announcement).
+
+Naming is audience-first, author-second (`handoff_<audience>_from_<author>`).
+The topic suffix is used for notes whose content isn't adequately
+summarized by the author–audience pair alone.
+
+#### When to write a finding vs a handoff vs a lab-notebook entry
+
+Four surfaces, four lifetimes. Pick the one that matches the lifetime
+of what you're writing.
+
+- **Finding (`notes/findings/<date>_<slug>.md`):** durable knowledge
+  about the data or the pipeline — "this is now established as true."
+  Has evidence, mechanism, implications, provenance. Append-only
+  (occasionally superseded or overturned; never silently deleted).
+  Read `notes/findings/README.md` for the structure convention.
+- **Handoff note (`notes/handoff_<audience>_from_<author>.md`):**
+  content *other agents* act on — a new artefact, a blocker you own, a
+  request for a specific experiment. Ephemeral: once the request is
+  fulfilled, the handoff can be deleted. If writing it generated new
+  durable knowledge, extract that into a finding and cross-link.
+- **Lab notebook (`lab_notebook_agent<N>.txt`):** content *you* need
+  later, or that makes your day reproducible — what you ran, job IDs,
+  paths, verification commands. One notebook per agent on their own
+  branch. Agent 1 maintains `lab_notebook_agent1.txt` on main.
+- **Memory files (`~/.claude/projects/…/memory/`):** durable knowledge
+  scoped to the user and the machine — user preferences, path
+  references, per-user state. Hand-curated by the agent; not checked
+  into git. No other agent reads it.
+
+Heuristic: if the thing you're writing is likely to still be true and
+useful in a month, it's a finding. If it expires when the recipient
+acts on it, it's a handoff. If it's "here's what I did today," it's a
+lab-notebook entry. If it's "how this specific user works," it's memory.
+
+Writing durable knowledge as a handoff is the most common mistake —
+the knowledge gets lost when the handoff is "done" and deleted. Always
+ask: is this a finding-shaped thing?
+
+#### Broadcasting new findings to all agents
+
+`notes/findings/README.md` contains a reverse-chronological index.
+**Every agent should scan it at session start** and read any finding
+listed above the date of their last session. This is the broadcast
+mechanism — no push notifications needed, just a well-maintained index.
+
+When writing a new finding:
+1. Create the finding file with a date-prefix filename.
+2. Append a row to the index table at the top of
+   `notes/findings/README.md`.
+3. If the finding is *immediately* actionable by a specific agent,
+   also write a short handoff (`notes/handoff_agent<N>_from_<author>.md`)
+   that points at the finding. The handoff is ephemeral; the finding
+   is durable. Don't duplicate content between the two.
+
+Optionally: each finding can declare an `audience:` field in its
+frontmatter (`all-modelling-agents`, `agent-2-only`, etc.) if targeted
+visibility matters. Default is "broadcast" (everyone should read it).
+
+#### Conventions for writing handoff notes
+
+- Lead with a one-line `tl;dr` so the recipient can skim.
+- If it's a request, say what you want, in what format, and how cheap
+  the work is. Always include a "not blocking on" line so the recipient
+  knows how urgent it is.
+- If it's an artefact announcement, list deliverable files, paths,
+  counts, and any blocker the recipient has to clear before using
+  them. Link to provenance (analysis number, code reference, or lab
+  notebook entry).
+- Cross-reference `notes/paths.md` for file locations rather than
+  embedding full paths that may drift — update `paths.md` in the same
+  commit as the handoff.

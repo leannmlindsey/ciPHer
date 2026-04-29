@@ -67,6 +67,16 @@ class TrainingConfig:
     # If set, intersect candidate proteins with IDs in this file and skip
     # the tool filter entirely. Mutually exclusive with tools/exclude_tools.
     positive_list_path: str = None
+    # Per-head positive lists (v2 highconf design, 2026-04-22).
+    # When set, the training sample pool is the UNION of both lists, and
+    # each sample's K (resp. O) labels are zeroed for samples not in the
+    # K (resp. O) list — so only proteins in the K list contribute to K
+    # head loss, and only proteins in the O list contribute to O head loss.
+    # Mutually exclusive with positive_list_path and with tools/exclude_tools.
+    # Back-compat: if only positive_list_path is set, both heads use it
+    # (identical to pre-v2 behaviour).
+    positive_list_k_path: str = None
+    positive_list_o_path: str = None
     # Optional cluster-stratified downsampling. cluster_file_path points at
     # a multi-threshold TSV (protein_id + cl30_/cl40_/.../cl95_ columns);
     # cluster_threshold picks which identity column to use. When set, the
@@ -123,6 +133,19 @@ class TrainingConfig:
             raise ValueError(
                 'positive_list_path is mutually exclusive with tools/'
                 'exclude_tools. Use one or the other, not both.')
+
+        # Per-head positive lists are mutex with the single-list field
+        # and with tool-based filters.
+        per_head = self.positive_list_k_path or self.positive_list_o_path
+        if per_head and self.positive_list_path:
+            raise ValueError(
+                'positive_list_path is mutually exclusive with '
+                'positive_list_k_path / positive_list_o_path. '
+                'Use one mode or the other.')
+        if per_head and (self.tools or self.exclude_tools):
+            raise ValueError(
+                'positive_list_k_path / positive_list_o_path are mutually '
+                'exclusive with tools/exclude_tools.')
 
     @classmethod
     def from_dict(cls, d):
@@ -255,13 +278,36 @@ def prepare_training_data(config, association_map_path, glycan_binders_path,
     all_protein_ids = {r['protein_id'] for r in rows}
     log(f'  {len(all_protein_ids)} unique proteins in association table')
 
-    # Step 3: Filter proteins (by positive_list_path OR by tools, not both)
+    # Step 3: Filter proteins. Three mutex modes:
+    #   (a) positive_list_path          -> single list for both heads
+    #   (b) positive_list_{k,o}_path    -> union-of-both-lists filter; each
+    #                                      head later zeroes labels for
+    #                                      samples not in its own list
+    #   (c) tools / exclude_tools       -> tool-based filter
+    # k_positive_set / o_positive_set track per-head membership for the
+    # later masking step; in (a) both point at positive_set, in (c) both
+    # stay None (no masking needed, all samples contribute to both heads).
     positive_set = None
+    k_positive_set = None
+    o_positive_set = None
+    from cipher.data.proteins import load_positive_list
     if config.positive_list_path:
-        from cipher.data.proteins import load_positive_list
         positive_set = load_positive_list(config.positive_list_path)
+        k_positive_set = positive_set
+        o_positive_set = positive_set
         log(f'Loaded positive list: {len(positive_set)} IDs from '
             f'{config.positive_list_path}')
+    elif config.positive_list_k_path or config.positive_list_o_path:
+        if config.positive_list_k_path:
+            k_positive_set = load_positive_list(config.positive_list_k_path)
+            log(f'Loaded K positive list: {len(k_positive_set)} IDs from '
+                f'{config.positive_list_k_path}')
+        if config.positive_list_o_path:
+            o_positive_set = load_positive_list(config.positive_list_o_path)
+            log(f'Loaded O positive list: {len(o_positive_set)} IDs from '
+                f'{config.positive_list_o_path}')
+        positive_set = (k_positive_set or set()) | (o_positive_set or set())
+        log(f'Per-head union positive set: {len(positive_set)} IDs')
     filtered_ids = _filter_proteins(all_protein_ids, glycan_dict, config, log,
                                     positive_set=positive_set)
 
@@ -315,6 +361,35 @@ def prepare_training_data(config, association_map_path, glycan_binders_path,
         ref_k_classes, ref_o_classes,
         min_count=config.min_label_count,
         min_fraction=config.min_label_fraction)
+
+    # Per-head label masking (v2 highconf mode). If the K list and O list
+    # differ, zero out K labels for samples not in the K list, and the
+    # same for O. This ensures only K-clean proteins contribute to K head
+    # training and only O-clean proteins contribute to O head training,
+    # while still letting the shared encoder (e.g. contrastive_encoder)
+    # see the union of both sets.
+    # In back-compat mode (positive_list_path set), k_positive_set IS
+    # o_positive_set IS positive_set, so this is a no-op: every surviving
+    # sample is in both sets.
+    if (k_positive_set is not None
+            and o_positive_set is not None
+            and k_positive_set is not o_positive_set):
+        md5_to_pids = defaultdict(set)
+        for r in rows:
+            if r['protein_md5'] in md5_k_counts or r['protein_md5'] in md5_o_counts:
+                md5_to_pids[r['protein_md5']].add(r['protein_id'])
+        n_k_masked = 0
+        n_o_masked = 0
+        for i, md5 in enumerate(md5_list):
+            pids = md5_to_pids.get(md5, set())
+            if not (pids & k_positive_set):
+                k_labels[i] = 0
+                n_k_masked += 1
+            if not (pids & o_positive_set):
+                o_labels[i] = 0
+                n_o_masked += 1
+        log(f'  Per-head masking: {n_k_masked} MD5s zeroed for K head, '
+            f'{n_o_masked} for O head')
 
     # For threshold strategy, some proteins may have all-zero labels after
     # thresholding. Drop them — training on "no labels" is misleading.

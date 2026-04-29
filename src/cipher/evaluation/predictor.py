@@ -62,6 +62,35 @@ class Predictor(ABC):
                            (empty dict if model is K-only)
         """
 
+    def score_phage_md5s(self, prot_md5s, host_k, host_o, emb_dict, **kwargs):
+        """Score a phage-host pair given protein MD5s + a shared embedding dict.
+
+        Default implementation: look up each MD5's embedding in the shared
+        emb_dict, then defer to `score_pair`. Subclasses that need
+        per-head embedding routing (e.g. dual-embedding predictors that
+        feed K and O heads from different embedding spaces) override
+        this method to ignore the shared emb_dict and use their own
+        per-head dicts.
+
+        Args:
+            prot_md5s: list of MD5 hex digests, one per phage protein.
+            host_k: K-type of host (or None / null sentinel).
+            host_o: O-type of host (or None / null sentinel).
+            emb_dict: shared {md5: embedding_array} as loaded by the
+                runner. Single-embedding predictors look up here; dual-
+                embedding predictors ignore this.
+            **kwargs: forward-compatibility — unknown kwargs are
+                accepted but ignored. Keeps the door open for future
+                signatures (e.g. host MD5, phage MD5) without breaking.
+
+        Returns:
+            float score (higher = more likely to interact) or None.
+        """
+        prot_embs = [emb_dict[m] for m in prot_md5s if m in emb_dict]
+        if not prot_embs:
+            return None
+        return self.score_pair(prot_embs, host_k, host_o)
+
     def score_pair(self, protein_embeddings, host_k, host_o):
         """Score a phage-host pair.
 
