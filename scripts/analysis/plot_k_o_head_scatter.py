@@ -64,9 +64,13 @@ def parse_args():
                    help='dir containing <DATASET>/metadata/interaction_matrix.tsv')
     p.add_argument('--dataset', default='PhageHostLearn',
                    choices=('CHEN', 'GORODNICHIV', 'UCSD', 'PBIP', 'PhageHostLearn'))
-    # Plot-only mode
+    # Plot-only mode (two TSV schemas accepted)
     p.add_argument('--per-pair-tsv', default=None,
                    help='use a previously computed per-pair TSV (skip predictor)')
+    p.add_argument('--per-phage-tsv', default=None,
+                   help='use a per-phage any-hit TSV from the hybrid pipeline '
+                        '(columns: dataset, phage_id, k_only_rank, o_only_rank, ...). '
+                        'One dot per phage (best rank across positives), not per pair.')
     p.add_argument('--label', default=None,
                    help='legend / title label (defaults to run_name from path)')
     # Plot configuration
@@ -153,11 +157,7 @@ def compute_per_pair(args):
           f'pool ≈ {len(serotypes)} candidate hosts')
 
     # Compute K-only and O-only ranks per phage (cache by phage)
-    from cipher.evaluation.ranking import _ranks_with_ties as _rank_ties \
-        if hasattr(__import__('cipher.evaluation.ranking', fromlist=['_ranks_with_ties']), '_ranks_with_ties') \
-        else None
-    if _rank_ties is None:
-        from cipher.evaluation.ranking import _ranks_with_ties as _rank_ties
+    from cipher.evaluation.ranking import _ranks_with_ties as _rank_ties
     pool_size = len(serotypes)
 
     rows = []
@@ -292,6 +292,31 @@ def read_tsv(path):
         return list(csv.DictReader(fh, delimiter='\t'))
 
 
+def _adapt_per_phage(rows, dataset_filter=None, pool_default=220):
+    """Convert per-phage TSV (dataset, phage_id, k_only_rank, o_only_rank, ...)
+    to the per-pair schema expected by render(). One dot per phage."""
+    out = []
+    for r in rows:
+        if dataset_filter and r.get('dataset') != dataset_filter:
+            continue
+        kr = r.get('k_only_rank') or ''
+        orr = r.get('o_only_rank') or ''
+        try: kr = int(kr) if kr.strip() else pool_default
+        except (ValueError, AttributeError): kr = pool_default
+        try: orr = int(orr) if orr.strip() else pool_default
+        except (ValueError, AttributeError): orr = pool_default
+        out.append({
+            'phage_id': r['phage_id'],
+            'host_id': '',
+            'host_K': r.get('host_K', ''),
+            'host_O': r.get('host_O', ''),
+            'k_only_rank': kr,
+            'o_only_rank': orr,
+            'pool_size': pool_default,
+        })
+    return out
+
+
 def main():
     args = parse_args()
     if args.per_pair_tsv:
@@ -300,6 +325,14 @@ def main():
             args.label = (Path(args.per_pair_tsv).stem
                           .replace('k_o_head_ranks_', '')
                           .rsplit('_', 1)[0])
+        render(rows, args)
+        return
+    if args.per_phage_tsv:
+        raw = read_tsv(args.per_phage_tsv)
+        rows = _adapt_per_phage(raw, dataset_filter=args.dataset)
+        if not args.label:
+            args.label = (Path(args.per_phage_tsv).stem
+                          .replace('per_phage_', ''))
         render(rows, args)
         return
     # Compute mode requires the model
