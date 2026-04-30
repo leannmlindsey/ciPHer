@@ -6,12 +6,14 @@ masking the predictor's `predict_protein()` to suppress one head's
 output. Computes HR@k=1..20 per mode plus the OR-combine ceiling
 (K-rank ≤ k OR O-rank ≤ k), all over the STRICT denominator:
 
-  strict denominator = positive pairs whose phage has at least one
-  annotated RBP in the validation FASTA. Pairs whose phage has no
-  annotated RBPs are excluded (model has no input). Pairs where
-  embedding NPZ has no vector for any annotated RBP are KEPT and
-  counted as misses (the embedding extractor failed — that's a model
-  coverage failure to surface, not normalize away).
+  strict denominator (project policy, 2026-04-30): every positive
+  (phage, host) pair from the interaction matrix counts. Phages with no
+  annotated RBPs are KEPT in the denominator and counted as misses.
+  Phages with annotated RBPs but no embeddings are KEPT and counted as
+  misses (embedding-extraction failure surfaced, not normalized away).
+  The denominator is the same for every model evaluated against the
+  same dataset — n_strict_phage equals the count of distinct phages
+  with ≥1 positive interaction in the matrix.
 
 Output: <experiment>/results/per_head_strict_eval.json with:
   {
@@ -136,19 +138,18 @@ def evaluate_dataset_per_head(predictor, original_predict, dataset_dir,
         interactions[p['phage_id']][p['host_id']] = p['label']
         serotypes[p['host_id']] = {'K': p['host_K'], 'O': p['host_O']}
 
-    # Strict denominator: positive pairs whose phage has at least one
-    # annotated RBP (md5 present in pid_md5). Pairs with annotated RBPs
-    # but no embeddings are KEPT (rank=None → miss).
+    # Fixed-denominator policy: every (phage, host) positive pair from
+    # the interaction matrix counts. A phage with zero annotated RBPs is
+    # KEPT in the denominator — its rank is None → counted as a miss in
+    # every HR@k. (This is the project-policy strict denominator; older
+    # versions of this script skipped no-RBP phages and produced
+    # inflated HR@k by ~10–28 % depending on dataset.)
     strict_pairs = []                           # (phage, host) pair-level
     phages_with_strict_pos = set()              # phages with ≥1 strict positive host
     for phage in sorted(interactions):
         pos_hosts = [h for h, lbl in interactions[phage].items() if lbl == 1]
         if not pos_hosts:
             continue
-        proteins = phage_protein_map.get(phage, set())
-        annotated_md5s = [pid_md5.get(p) for p in proteins if p in pid_md5]
-        if not annotated_md5s:
-            continue  # phage has zero annotated RBPs → out of scope
         for h in pos_hosts:
             if h in serotypes:
                 strict_pairs.append((phage, h))

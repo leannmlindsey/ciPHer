@@ -1,0 +1,74 @@
+{
+  "existing_rows": 143240,
+  "new_rows": 1067,
+  "thresholds": [
+    {
+      "threshold": 30,
+      "n_queries": 1067,
+      "n_inherited": 582,
+      "n_fresh_singletons_or_groups": 130,
+      "max_cluster_id_after": 40197
+    },
+    {
+      "threshold": 40,
+      "n_queries": 1067,
+      "n_inherited": 513,
+      "n_fresh_singletons_or_groups": 155,
+      "max_cluster_id_after": 45106
+    },
+    {
+      "threshold": 50,
+      "n_queries": 1067,
+      "n_inherited": 475,
+      "n_fresh_singletons_or_groups": 195,
+      "max_cluster_id_after": 84917
+    },
+    {
+      "threshold": 60,
+      "n_queries": 1067,
+      "n_inherited": 462,
+      "n_fresh_singletons_or_groups": 214,
+      "max_cluster_id_after": 111488
+    },
+    {
+      "threshold": 70,
+      "n_queries": 1067,
+      "n_inherited": 454,
+      "n_fresh_singletons_or_groups": 221,
+      "max_cluster_id_after": 138409
+    },
+    {
+      "threshold": 80,
+      "n_queries": 1067,
+      "n_inherited": 453,
+      "n_fresh_singletons_or_groups": 225,
+      "max_cluster_id_after": 175462
+    },
+    {
+      "threshold": 85,
+      "n_queries": 1067,
+      "n_inherited": 451,
+      "n_fresh_singletons_or_groups": 231,
+      "max_cluster_id_after": 204759
+    },
+    {
+      "threshold": 90,
+      "n_queries": 1067,
+      "n_inherited": 448,
+      "n_fresh_singletons_or_groups": 241,
+      "max_cluster_id_after": 250311
+    },
+    {
+      "threshold": 95,
+      "n_queries": 1067,
+      "n_inherited": 426,
+      "n_fresh_singletons_or_groups": 278,
+      "max_cluster_id_after": 356155
+    }
+  ],
+  "params": {
+    "tool": "mmseqs2 easy-search + easy-cluster",
+    "coverage_mode": "shorter (--cov-mode 2)",
+    "coverage_min": 0.8
+  }
+}
