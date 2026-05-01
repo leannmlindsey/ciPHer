@@ -194,7 +194,7 @@ fi
 echo \"\"
 echo \"======================================\"
 echo \"Done: ${NAME} at \$(date)\"
-echo \"Eval JSONs saved to \${EXP_DIR}/results/:\"
+echo \"Eval JSONs saved to ${EXP_DIR}/results/:\"
 echo \"  evaluation.json              — default (zscore combined)\"
 echo \"  evaluation_k_only.json       — --head-mode k_only\"
 echo \"  evaluation_o_only.json       — --head-mode o_only\"
