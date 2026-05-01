@@ -6,7 +6,7 @@ Same colors, same labels, same metric (phage-level any-hit, OR mode,
 strict denominator). Curves:
     - Cipher K-only / O-only / OR (sweep_prott5_mean_cl70)
     - TropiSEQ / TropiGAT / Combined Tropi (phage-weighted overall)
-    - Optional cipher hybrid OR (LA K + MLP O) if the JSON exists
+    - Optional cipher hybrid OR (esm2_3b K + kmer_aa20_k4 O) if the JSON exists
 
 Reads the harvest CSV + agent 6's 4-way TSV, post-corrects to the
 project-policy fixed denominators (PHL=100, PBIP=103, sum=220).
@@ -31,7 +31,7 @@ AGENT6_TSV = ('/Users/leannmlindsey/WORK/PHI_TSP/cipher-depolymerase-domain/'
               'data/recall_at_k_4way/recall_at_k_4way.tsv')
 HARVEST_CSV = 'results/experiment_log.csv'
 
-CIPHER_RUN_NAME = 'sweep_prott5_mean_cl70'
+CIPHER_RUN_NAME = 'sweep_kmer_aa20_k4'
 DATASETS = ['CHEN', 'GORODNICHIV', 'UCSD', 'PBIP', 'PhageHostLearn']
 
 FIXED_DENOM_PHAGE = {'CHEN': 3, 'GORODNICHIV': 3, 'UCSD': 11,
@@ -39,10 +39,10 @@ FIXED_DENOM_PHAGE = {'CHEN': 3, 'GORODNICHIV': 3, 'UCSD': 11,
 FIXED_DENOM_TOTAL = sum(FIXED_DENOM_PHAGE.values())  # 220
 
 HYBRID_CURVES_JSON = ('results/analysis/'
-                       'hybrid_or_la_K_sweep_O_curves.json')
+                       'hybrid_or_esm2_3b_K_kmer_aa20_O_curves.json')
 HYBRID_COLOR = '#6a3d9a'
 HYBRID_LW    = 2.6
-HYBRID_LABEL = 'cipher hybrid OR (LA K + MLP O)'
+HYBRID_LABEL = 'cipher hybrid OR (esm2_3b K + kmer_aa20_k4 O)'
 
 OUT_SVG = 'results/figures/recall_at_k_overall_vs_competitors.svg'
 

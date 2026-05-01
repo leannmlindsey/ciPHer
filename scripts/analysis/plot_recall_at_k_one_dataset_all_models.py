@@ -44,14 +44,15 @@ FIXED_DENOM_TOTAL = sum(FIXED_DENOM_PHAGE.values())  # 220
 # embeddings, and training regimes. Edit freely. Order is preserved in
 # the legend.
 DEFAULT_RUNS = [
-    'concat_prott5_mean+kmer_li10_k5',
-    'sweep_esm2_650m_mean_cl70',
-    'sweep_prott5_mean_cl70',
-    'sweep_esm2_3b_mean_cl70',
-    'sweep_kmer_murphy8_k5',
-    'la_seg4_posList_cl70',
-    'highconf_pipeline_K_prott5_mean',
-    'lab_esm2_650m_full_highconf_pipeline',
+    # Refreshed 2026-04-30 from harvest leaderboard: top runs by PHL OR HR@1.
+    'sweep_kmer_aa20_k4',                       # 0.560 — current best single
+    'concat_prott5_mean+kmer_li10_k5_cap300',   # 0.480
+    'concat_prott5_mean+kmer_li10_k5',          # 0.480
+    'sweep_esm2_650m_mean_cl70',                # 0.470
+    'sweep_prott5_mean_cl70',                   # 0.460
+    'sweep_posList_esm2_3b_mean_cl70',          # 0.460 — K-source for the top hybrid
+    'la_seg4_posList_cl70',                     # 0.450
+    'la_v3_uat_prott5_xl_seg8',                 # 0.430 — best K-head by PHL K@1
 ]
 
 OUT_SVG = 'results/figures/recall_at_k_one_dataset_all_models.svg'

@@ -48,7 +48,7 @@ AGENT6_TSV = ('/Users/leannmlindsey/WORK/PHI_TSP/cipher-depolymerase-domain/'
               'data/recall_at_k_4way/recall_at_k_4way.tsv')
 HARVEST_CSV = 'results/experiment_log.csv'
 
-CIPHER_RUN_NAME = 'sweep_prott5_mean_cl70'  # top performer with 5/5 K coverage
+CIPHER_RUN_NAME = 'sweep_kmer_aa20_k4'  # top performer with 5/5 K coverage
 DATASETS = ['CHEN', 'GORODNICHIV', 'UCSD', 'PBIP', 'PhageHostLearn']
 
 # Fixed denominators per project policy (memory: feedback_strict_denominator).
@@ -60,10 +60,10 @@ FIXED_DENOM_TOTAL = sum(FIXED_DENOM_PHAGE.values())  # 220
 
 # Optional hybrid OR curves (cross-model: K from one run + O from another)
 HYBRID_CURVES_JSON = ('results/analysis/'
-                       'hybrid_or_la_K_sweep_O_curves.json')
+                       'hybrid_or_esm2_3b_K_kmer_aa20_O_curves.json')
 HYBRID_COLOR = '#6a3d9a'
 HYBRID_LW    = 2.6
-HYBRID_LABEL = 'cipher hybrid OR (LA K + MLP O)'
+HYBRID_LABEL = 'cipher hybrid OR (esm2_3b K + kmer_aa20_k4 O)'
 
 OUT_SVG = 'results/figures/recall_at_k_vs_competitors.svg'
 

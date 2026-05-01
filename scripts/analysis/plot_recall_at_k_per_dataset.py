@@ -30,18 +30,18 @@ import matplotlib.pyplot as plt
 AGENT6_TSV = ('/Users/leannmlindsey/WORK/PHI_TSP/cipher-depolymerase-domain/'
               'data/recall_at_k_4way/recall_at_k_4way.tsv')
 HARVEST_CSV = 'results/experiment_log.csv'
-CIPHER_RUN_NAME = 'sweep_prott5_mean_cl70'
+CIPHER_RUN_NAME = 'sweep_kmer_aa20_k4'
 
 # Optional hybrid OR curves (cross-model: K from one run + O from another).
 # Set HYBRID_CURVES_JSON to the path of cross_model_or_union.py's
 # --out-curves-json output to render an additional "cipher hybrid OR"
 # curve on each panel.
 HYBRID_CURVES_JSON = ('results/analysis/'
-                       'hybrid_or_la_K_sweep_O_curves.json')
+                       'hybrid_or_esm2_3b_K_kmer_aa20_O_curves.json')
 
 HYBRID_COLOR = '#6a3d9a'   # dark purple
 HYBRID_LW    = 2.6
-HYBRID_LABEL = 'cipher hybrid OR (LA K + MLP O)'
+HYBRID_LABEL = 'cipher hybrid OR (esm2_3b K + kmer_aa20_k4 O)'
 DATASETS = ['CHEN', 'GORODNICHIV', 'UCSD', 'PBIP', 'PhageHostLearn']
 
 # Fixed denominators per project policy (memory: feedback_strict_denominator).

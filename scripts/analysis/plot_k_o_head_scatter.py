@@ -64,13 +64,20 @@ def parse_args():
                    help='dir containing <DATASET>/metadata/interaction_matrix.tsv')
     p.add_argument('--dataset', default='PhageHostLearn',
                    choices=('CHEN', 'GORODNICHIV', 'UCSD', 'PBIP', 'PhageHostLearn'))
-    # Plot-only mode (two TSV schemas accepted)
+    # Plot-only mode (multiple TSV schemas accepted)
     p.add_argument('--per-pair-tsv', default=None,
                    help='use a previously computed per-pair TSV (skip predictor)')
     p.add_argument('--per-phage-tsv', default=None,
                    help='use a per-phage any-hit TSV from the hybrid pipeline '
                         '(columns: dataset, phage_id, k_only_rank, o_only_rank, ...). '
                         'One dot per phage (best rank across positives), not per pair.')
+    p.add_argument('--k-tsv', default=None,
+                   help='HYBRID MODE: per-phage TSV whose k_only_rank column '
+                        'is plotted on the x-axis. Pair with --o-tsv for a '
+                        'cross-model K vs O scatter.')
+    p.add_argument('--o-tsv', default=None,
+                   help='HYBRID MODE: per-phage TSV whose o_only_rank column '
+                        'is plotted on the y-axis.')
     p.add_argument('--label', default=None,
                    help='legend / title label (defaults to run_name from path)')
     # Plot configuration
@@ -317,8 +324,54 @@ def _adapt_per_phage(rows, dataset_filter=None, pool_default=220):
     return out
 
 
+def _adapt_hybrid(k_rows, o_rows, dataset_filter=None, pool_default=220):
+    """Take K-ranks from one per-phage TSV and O-ranks from another, joined
+    on (dataset, phage_id). One dot per phage."""
+    k_idx = {(r['dataset'], r['phage_id']): r for r in k_rows}
+    o_idx = {(r['dataset'], r['phage_id']): r for r in o_rows}
+    keys = set(k_idx) | set(o_idx)
+    out = []
+    for ds, ph in keys:
+        if dataset_filter and ds != dataset_filter: continue
+        k_row = k_idx.get((ds, ph), {})
+        o_row = o_idx.get((ds, ph), {})
+        kr = (k_row.get('k_only_rank') or '').strip()
+        orr = (o_row.get('o_only_rank') or '').strip()
+        try: kr = int(kr) if kr else pool_default
+        except (ValueError, TypeError): kr = pool_default
+        try: orr = int(orr) if orr else pool_default
+        except (ValueError, TypeError): orr = pool_default
+        out.append({
+            'phage_id': ph,
+            'host_id': '',
+            'host_K': k_row.get('host_K', '') or o_row.get('host_K', ''),
+            'host_O': k_row.get('host_O', '') or o_row.get('host_O', ''),
+            'k_only_rank': kr,
+            'o_only_rank': orr,
+            'pool_size': pool_default,
+        })
+    return out
+
+
 def main():
     args = parse_args()
+    # Hybrid mode: K from one TSV, O from another
+    if args.k_tsv and args.o_tsv:
+        k_raw = read_tsv(args.k_tsv)
+        o_raw = read_tsv(args.o_tsv)
+        rows = _adapt_hybrid(k_raw, o_raw, dataset_filter=args.dataset)
+        if not args.label:
+            k_lab = Path(args.k_tsv).stem.replace('per_phage_', '')
+            o_lab = Path(args.o_tsv).stem.replace('per_phage_', '')
+            args.label = f'HYBRID: K from {k_lab}, O from {o_lab}'
+        if not args.out_svg:
+            args.out_svg = (
+                f'results/figures/k_o_head_scatter_HYBRID_'
+                f'K-{Path(args.k_tsv).stem.replace("per_phage_","")}_'
+                f'O-{Path(args.o_tsv).stem.replace("per_phage_","")}_'
+                f'{args.dataset}.svg').replace('+', 'plus')
+        render(rows, args)
+        return
     if args.per_pair_tsv:
         rows = read_tsv(args.per_pair_tsv)
         if not args.label:

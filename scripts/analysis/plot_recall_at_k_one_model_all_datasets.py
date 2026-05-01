@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 
 HARVEST_CSV = 'results/experiment_log.csv'
 
-DEFAULT_RUN = 'sweep_prott5_mean_cl70'
+DEFAULT_RUN = 'sweep_kmer_aa20_k4'   # current best by PHL OR HR@1 (0.560) and overall (0.773)
 DEFAULT_MODE = 'OR'  # OR | K | O — chooses the per-head any-hit column family
 DATASETS = ['CHEN', 'GORODNICHIV', 'UCSD', 'PBIP', 'PhageHostLearn']
 
