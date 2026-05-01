@@ -105,7 +105,11 @@ def backfill_one(exp_dir):
 
     run_name = exp_dir.name
     cli = build_cli_argv(cfg, run_name)
-    prov['cli_argv'] = cli
+    # submit_training_variant.py expects cli_argv as a single
+    # shell-quoted string (it calls shlex.split on it). Quote any
+    # token containing whitespace; bare tokens stay bare.
+    import shlex
+    prov['cli_argv'] = ' '.join(shlex.quote(t) for t in cli)
     if 'host' not in prov: prov['host'] = ''
     if 'slurm_job_id' not in prov: prov['slurm_job_id'] = ''
     if 'user' not in prov: prov['user'] = ''
