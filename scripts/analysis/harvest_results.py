@@ -104,7 +104,10 @@ def extract_row(exp_dir, source_label=''):
         'n_o_classes': exp.get('n_o_classes', ''),
     }
 
-    # Per-dataset metrics
+    # Per-dataset metrics — cipher's NEW eval (host-rank/phage-rank, merged,
+    # over the lenient denominator that cipher's runner uses by default).
+    # n_pairs per direction is captured so legacy composites can be
+    # phage-weighted (consistent with the strict-denom overall_*).
     for ds in DATASETS:
         r = ev.get(ds, {})
         rh = r.get('rank_hosts', {}).get('hr_at_k', {})
@@ -114,23 +117,185 @@ def extract_row(exp_dir, source_label=''):
             row[f'{ds}_rp{k}'] = rp.get(str(k), '')
         row[f'{ds}_rh_mrr'] = r.get('rank_hosts', {}).get('mrr', '')
         row[f'{ds}_rp_mrr'] = r.get('rank_phages', {}).get('mrr', '')
+        row[f'{ds}_rh_n'] = r.get('rank_hosts', {}).get('n_pairs', '')
+        row[f'{ds}_rp_n'] = r.get('rank_phages', {}).get('n_pairs', '')
 
-    # Derived scores
-    phl_pbip_vals = [
-        _num(row['PhageHostLearn_rh1']), _num(row['PhageHostLearn_rp1']),
-        _num(row['PBIP_rh1']), _num(row['PBIP_rp1']),
-    ]
-    if all(v is not None for v in phl_pbip_vals):
-        row['phl_pbip_combined_hr1'] = sum(phl_pbip_vals) / 4
-    else:
-        row['phl_pbip_combined_hr1'] = ''
+    # Per-head strict-denominator HR@k from results/per_head_strict_eval.json.
+    # We emit FULL k=1..20 curves for ALL FOUR head modes (K-only, O-only,
+    # merged, OR) plus best-of-three, in BOTH directions (phage→host and
+    # host→phage), so plot scripts can read the harvest CSV alone.
+    #
+    # Metric families:
+    #   any-hit  (PhageHostLearn-comparable):
+    #     phage→host: for each phage with positives, did ≥1 positive host
+    #                 land at rank ≤ k? (cipher primary use case)
+    #     host→phage: for each host with positives, did ≥1 positive phage
+    #                 land at rank ≤ k? (PHL-tool comparison direction)
+    #   per-pair (legacy, stricter): per (phage, positive host) pair, did
+    #                                THIS host land at rank ≤ k?
+    ph = _safe_load(os.path.join(exp_dir, 'results', 'per_head_strict_eval.json'))
+    K_VALUES = list(range(1, 21))
 
-    all_hr1 = [_num(row[f'{ds}_rh1']) for ds in DATASETS] + \
-              [_num(row[f'{ds}_rp1']) for ds in DATASETS]
-    if all(v is not None for v in all_hr1):
-        row['five_ds_mean_hr1'] = sum(all_hr1) / len(all_hr1)
-    else:
-        row['five_ds_mean_hr1'] = ''
+    def _curve(d, mode_key, family):
+        """Pull a k=1..20 curve from `d[mode_key][family]`. Returns list of
+        20 floats or None per k. Handles JSON int-vs-str key drift."""
+        out = []
+        for k in K_VALUES:
+            v = (d.get(mode_key, {}).get(family, {}).get(str(k))
+                 or d.get(mode_key, {}).get(family, {}).get(k))
+            try: v = float(v) if v is not None else None
+            except (TypeError, ValueError): v = None
+            out.append(v)
+        return out
+
+    for ds in DATASETS:
+        d = ph.get(ds, {})
+
+        # FULL k=1..20 curves per mode (K, O, merged, OR), phage→host any-hit.
+        for mode_key, col_key in (('k_only', 'K'), ('o_only', 'O'),
+                                    ('merged', 'merged'), ('or', 'OR')):
+            curve = _curve(d, mode_key, 'hr_at_k_any_hit')
+            for k, v in zip(K_VALUES, curve):
+                row[f'{ds}_{col_key}_phage2host_anyhit_HR{k}'] = (
+                    v if v is not None else '')
+            # backward-compat HR@1 alias (old plots read this)
+            row[f'{ds}_{col_key}_anyhit_HR1'] = curve[0] if curve[0] is not None else ''
+
+            pair_curve = _curve(d, mode_key, 'hr_at_k_pair')
+            row[f'{ds}_{col_key}_pair_HR1'] = (
+                pair_curve[0] if pair_curve[0] is not None else '')
+
+        # Best-of-three (K, O, merged) per direction — leaderboard metric
+        row[f'{ds}_best_anyhit_HR1'] = d.get('best_anyhit_HR1', '')
+        row[f'{ds}_best_pair_HR1'] = d.get('best_strict_HR1', '')
+
+        # Best-of-three FULL curves: max over (k_only, o_only, merged) at each k.
+        def _max_curve(family):
+            out = []
+            for k in K_VALUES:
+                vs = []
+                for mode_key in ('k_only', 'o_only', 'merged'):
+                    v = (d.get(mode_key, {}).get(family, {}).get(str(k))
+                         or d.get(mode_key, {}).get(family, {}).get(k))
+                    if v is not None:
+                        try: vs.append(float(v))
+                        except (TypeError, ValueError): pass
+                out.append(max(vs) if vs else None)
+            return out
+        ph2h = _max_curve('hr_at_k_any_hit')
+        for k, v in zip(K_VALUES, ph2h):
+            row[f'{ds}_best_phage2host_anyhit_HR{k}'] = (v if v is not None else '')
+        h2p = _max_curve('hr_at_k_phage_any_hit')
+        for k, v in zip(K_VALUES, h2p):
+            row[f'{ds}_best_host2phage_anyhit_HR{k}'] = (v if v is not None else '')
+
+        # Backward-compatible aliases
+        row[f'{ds}_K_strict_HR1'] = row[f'{ds}_K_anyhit_HR1']
+        row[f'{ds}_O_strict_HR1'] = row[f'{ds}_O_anyhit_HR1']
+        row[f'{ds}_merged_strict_HR1'] = row[f'{ds}_merged_anyhit_HR1']
+        row[f'{ds}_OR_strict_HR1'] = row[f'{ds}_OR_anyhit_HR1']
+        row[f'{ds}_best_strict_HR1'] = row[f'{ds}_best_anyhit_HR1']
+
+        # Counts
+        row[f'{ds}_n_strict_phage'] = d.get('n_strict_phage', '')
+        row[f'{ds}_n_strict_pair'] = d.get('n_strict_pair', '')
+        row[f'{ds}_n_strict_host'] = d.get('n_strict_host', '')
+        row[f'{ds}_n_strict'] = d.get('n_strict_pair', d.get('n_strict', ''))
+
+    # Derived NEW-eval composites (cold-start fallback for SLURM wrappers
+    # before per_head_strict_eval has run). Now phage/host-weighted —
+    # consistent with overall_anyhit_HR1 going forward.
+    def _weighted_neweval(datasets, directions):
+        num, den = 0.0, 0
+        for ds in datasets:
+            for d in directions:
+                rate = _num(row.get(f'{ds}_{d}1'))
+                n = _num(row.get(f'{ds}_{d}_n'))
+                if rate is not None and n is not None and n > 0:
+                    num += rate * n
+                    den += int(n)
+        return (num / den) if den > 0 else None
+
+    phl_pbip = _weighted_neweval(['PhageHostLearn', 'PBIP'], ('rh', 'rp'))
+    row['phl_pbip_combined_hr1'] = phl_pbip if phl_pbip is not None else ''
+
+    five_ds = _weighted_neweval(DATASETS, ('rh', 'rp'))
+    row['five_ds_mean_hr1'] = five_ds if five_ds is not None else ''
+
+    # Composites — phage-weighted across ALL 5 datasets (treat each
+    # phage equally, regardless of dataset size). Dataset-mean averaging
+    # was misleading because GORODNICHIV (n=12, trivially solved) carried
+    # the same weight as PhageHostLearn (n≈99) or PBIP (n≈101).
+    #
+    # Weighted overall HR@k = Σ(rate_d × n_d) / Σ(n_d)
+    def _weighted_overall_HR1(rate_field, n_field):
+        num, den = 0.0, 0
+        for ds in DATASETS:
+            rate = _num(row.get(f'{ds}_{rate_field}'))
+            n = _num(row.get(f'{ds}_{n_field}'))
+            if rate is not None and n is not None and n > 0:
+                num += rate * n
+                den += int(n)
+        return (num / den) if den > 0 else None
+
+    def _weighted_overall_curve(curve_prefix, n_field):
+        """Return list of 20 weighted HR@k values, k=1..20."""
+        out = []
+        for k in range(1, 21):
+            num, den = 0.0, 0
+            for ds in DATASETS:
+                rate = _num(row.get(f'{ds}_{curve_prefix}{k}'))
+                n = _num(row.get(f'{ds}_{n_field}'))
+                if rate is not None and n is not None and n > 0:
+                    num += rate * n
+                    den += int(n)
+            out.append((num / den) if den > 0 else None)
+        return out
+
+    # phage→host direction (cipher primary use case): weighted by phages-with-pos
+    overall_p2h = _weighted_overall_HR1('best_anyhit_HR1', 'n_strict_phage')
+    row['overall_anyhit_HR1'] = overall_p2h if overall_p2h is not None else ''
+    p2h_curve = _weighted_overall_curve('best_phage2host_anyhit_HR', 'n_strict_phage')
+    for k, v in zip(range(1, 21), p2h_curve):
+        row[f'overall_phage2host_anyhit_HR{k}'] = (v if v is not None else '')
+
+    # host→phage direction (PHL-tool comparison): weighted by hosts-with-pos
+    h2p_curve = _weighted_overall_curve('best_host2phage_anyhit_HR', 'n_strict_host')
+    for k, v in zip(range(1, 21), h2p_curve):
+        row[f'overall_host2phage_anyhit_HR{k}'] = (v if v is not None else '')
+    row['overall_host2phage_anyhit_HR1'] = (
+        h2p_curve[0] if h2p_curve and h2p_curve[0] is not None else '')
+
+    # OR ceiling (phage→host direction)
+    or_curve = _weighted_overall_curve('OR_phage2host_anyhit_HR', 'n_strict_phage')
+    for k, v in zip(range(1, 21), or_curve):
+        row[f'overall_OR_anyhit_HR{k}'] = (v if v is not None else '')
+    row['overall_OR_anyhit_HR1'] = (
+        or_curve[0] if or_curve and or_curve[0] is not None else '')
+
+    # K-only and O-only weighted (phage→host direction) — for fair
+    # K vs O vs OR comparisons at the 5-dataset level (mirrors the
+    # PHL-only K/O/OR trio so plots can apples-to-apples both panels).
+    k_curve = _weighted_overall_curve('K_phage2host_anyhit_HR', 'n_strict_phage')
+    for k, v in zip(range(1, 21), k_curve):
+        row[f'overall_K_anyhit_HR{k}'] = (v if v is not None else '')
+    o_curve = _weighted_overall_curve('O_phage2host_anyhit_HR', 'n_strict_phage')
+    for k, v in zip(range(1, 21), o_curve):
+        row[f'overall_O_anyhit_HR{k}'] = (v if v is not None else '')
+    merged_curve = _weighted_overall_curve('merged_phage2host_anyhit_HR', 'n_strict_phage')
+    for k, v in zip(range(1, 21), merged_curve):
+        row[f'overall_merged_anyhit_HR{k}'] = (v if v is not None else '')
+
+    # Per-pair composite (legacy, weighted)
+    overall_pair = _weighted_overall_HR1('best_pair_HR1', 'n_strict_pair')
+    row['overall_best_pair_HR1'] = overall_pair if overall_pair is not None else ''
+
+    # Backward-compat aliases (point at the new overall composite)
+    row['phl_pbip_best_anyhit_HR1'] = row['overall_anyhit_HR1']
+    row['phl_pbip_OR_anyhit_HR1'] = row['overall_OR_anyhit_HR1']
+    row['phl_pbip_best_strict_HR1'] = row['overall_anyhit_HR1']
+    row['phl_pbip_OR_strict_HR1'] = row['overall_OR_anyhit_HR1']
+    row['phl_pbip_best_pair_HR1'] = row['overall_best_pair_HR1']
 
     return row
 
@@ -181,8 +346,16 @@ def main():
         print('No evaluated experiments found in any supplied root.')
         return
 
+    # Sort priority: weighted overall any-hit > legacy combined.
+    have_overall = any(isinstance(r.get('overall_anyhit_HR1'), (int, float))
+                       for r in all_rows)
+    sort_field = ('overall_anyhit_HR1' if have_overall
+                  else 'phl_pbip_combined_hr1')
+    print(f'Sorting by: {sort_field}  '
+          '(phage-weighted overall across 5 datasets)')
+
     def sort_key(r):
-        v = r.get('phl_pbip_combined_hr1', '')
+        v = r.get(sort_field, '')
         return -v if isinstance(v, (int, float)) else 1.0
     all_rows.sort(key=sort_key)
 

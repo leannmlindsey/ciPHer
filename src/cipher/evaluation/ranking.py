@@ -32,9 +32,8 @@ def rank_hosts(predictor, phage_proteins, candidate_hosts, serotypes,
         list of (host_id, score) sorted by score descending
     """
     prot_md5s = [pid_md5[p] for p in phage_proteins if p in pid_md5]
-    prot_embs = [emb_dict[m] for m in prot_md5s if m in emb_dict]
 
-    if not prot_embs:
+    if not prot_md5s:
         return []
 
     host_scores = []
@@ -43,7 +42,10 @@ def rank_hosts(predictor, phage_proteins, candidate_hosts, serotypes,
             continue
         host_k = serotypes[host]['K']
         host_o = serotypes[host]['O']
-        score = predictor.score_pair(prot_embs, host_k, host_o)
+        # score_phage_md5s defers to score_pair for single-embedding
+        # predictors; dual-embedding predictors override it to look up
+        # K and O embeddings from their own per-head dicts.
+        score = predictor.score_phage_md5s(prot_md5s, host_k, host_o, emb_dict)
         if score is not None:
             host_scores.append((host, score))
 
@@ -77,9 +79,8 @@ def rank_phages(predictor, host_id, candidate_phages, phage_protein_map,
     for phage in candidate_phages:
         proteins = phage_protein_map.get(phage, set())
         prot_md5s = [pid_md5[p] for p in proteins if p in pid_md5]
-        prot_embs = [emb_dict[m] for m in prot_md5s if m in emb_dict]
 
-        score = predictor.score_pair(prot_embs, host_k, host_o)
+        score = predictor.score_phage_md5s(prot_md5s, host_k, host_o, emb_dict)
         if score is not None:
             phage_scores.append((phage, score))
 
@@ -125,21 +126,6 @@ def evaluate_rankings(predictor, dataset_name, dataset_dir,
     Builds serotypes from the interaction matrix (which has host_K, host_O
     inline), so no external serotype file is needed.
 
-    Denominator semantics (changed 2026-04-27): every positive (phage, host)
-    pair in the dataset contributes to ``n_pairs`` and to HR@k. If the model
-    cannot score a positive pair — for example because the host's K-type
-    falls outside the model's training vocabulary, or the host has
-    null serotype values, or the phage has no scorable proteins — the
-    positive is counted as a miss (rank = ∞), not silently dropped.
-
-    This was previously a real methodological bug: models trained on
-    restricted class vocabularies (e.g. v1 highconf with 64 of 161
-    K-classes) could quote inflated HR@1 numbers because their denominator
-    excluded all the pairs they couldn't score. With this fix, any pair the
-    model fails to score counts against its hit rate, so HR@k numbers from
-    different models are directly comparable on a fixed denominator (the
-    full validation set).
-
     Args:
         predictor: Predictor instance
         dataset_name: e.g., 'PBIP' (for logging only)
@@ -154,12 +140,7 @@ def evaluate_rankings(predictor, dataset_name, dataset_dir,
 
     Returns:
         dict with 'rank_hosts' and 'rank_phages' results, each containing:
-            n_pairs       - total number of positive pairs (fixed denominator)
-            n_pairs_scored - number of those pairs the model actually scored
-            n_phages
-            n_hosts
-            hr_at_k
-            mrr
+            n_pairs, n_phages, n_hosts, hr_at_k, mrr
     """
     from cipher.data.interactions import (
         load_interaction_pairs, load_phage_protein_mapping,
@@ -181,72 +162,86 @@ def evaluate_rankings(predictor, dataset_name, dataset_dir,
     all_phages = sorted(interactions.keys())
     all_hosts = sorted(serotypes.keys())
 
-    UNSCORABLE = float('inf')
-
     # ── Rank hosts given phage ──
+    # Two metrics:
+    #   `rank_hosts_ranks` — per (phage, positive host) pair (legacy).
+    #   `phage_anyhit_ranks` — per phage with positives, the BEST rank
+    #     among its positive hosts (PhageHostLearn-style "any-hit-in-top-k").
     rank_hosts_ranks = []
-    n_hosts_scored = 0
+    phage_anyhit_ranks = []
     for phage in all_phages:
         pos_hosts = [h for h, label in interactions[phage].items() if label == 1]
+        candidates = list(interactions[phage].keys())
         if not pos_hosts:
             continue
-        candidates = list(interactions[phage].keys())
 
         proteins = phage_protein_map.get(phage, set())
         ranked = rank_hosts(predictor, proteins, candidates, serotypes,
                             emb_dict, pid_md5)
-        host_to_rank = _ranks_with_ties(ranked, tie_method=tie_method) if ranked else {}
+        if not ranked:
+            continue
 
+        host_to_rank = _ranks_with_ties(ranked, tie_method=tie_method)
+        per_phage_ranks = []
         for pos_h in pos_hosts:
             if pos_h in host_to_rank:
                 rank_hosts_ranks.append(host_to_rank[pos_h])
-                n_hosts_scored += 1
-            else:
-                # Positive host could not be scored — counts as a miss.
-                # rank = ∞ fails HR@k for any finite k and contributes 0 to MRR.
-                rank_hosts_ranks.append(UNSCORABLE)
+                per_phage_ranks.append(host_to_rank[pos_h])
+        if per_phage_ranks:
+            phage_anyhit_ranks.append(min(per_phage_ranks))
 
     # ── Rank phages given host ──
+    # Symmetric: `host_anyhit_ranks` = per host with positives, best
+    # rank among its positive phages.
     host_interactions = defaultdict(dict)
     for phage in interactions:
         for host, label in interactions[phage].items():
             host_interactions[host][phage] = label
 
     rank_phages_ranks = []
-    n_phages_scored = 0
+    host_anyhit_ranks = []
     for host in sorted(host_interactions.keys()):
         pos_phages = [ph for ph, label in host_interactions[host].items()
                       if label == 1]
+        candidates = list(host_interactions[host].keys())
         if not pos_phages:
             continue
-        candidates = list(host_interactions[host].keys())
 
         ranked = rank_phages(predictor, host, candidates, phage_protein_map,
                              serotypes, emb_dict, pid_md5)
-        phage_to_rank = _ranks_with_ties(ranked, tie_method=tie_method) if ranked else {}
+        if not ranked:
+            continue
 
+        phage_to_rank = _ranks_with_ties(ranked, tie_method=tie_method)
+        per_host_ranks = []
         for pos_ph in pos_phages:
             if pos_ph in phage_to_rank:
                 rank_phages_ranks.append(phage_to_rank[pos_ph])
-                n_phages_scored += 1
-            else:
-                rank_phages_ranks.append(UNSCORABLE)
+                per_host_ranks.append(phage_to_rank[pos_ph])
+        if per_host_ranks:
+            host_anyhit_ranks.append(min(per_host_ranks))
 
     return {
         'rank_hosts': {
+            # legacy per-pair counts
             'n_pairs': len(rank_hosts_ranks),
-            'n_pairs_scored': n_hosts_scored,
+            'hr_at_k': hr_curve(rank_hosts_ranks, max_k),       # per-pair (legacy)
+            'mrr': mrr(rank_hosts_ranks),
+            # new: phage-level any-hit (PHL-style headline)
+            'n_phages_with_pos': len(phage_anyhit_ranks),
+            'hr_at_k_any_hit': hr_curve(phage_anyhit_ranks, max_k),
+            'mrr_any_hit': mrr(phage_anyhit_ranks),
             'n_phages': len(all_phages),
             'n_hosts': len(all_hosts),
-            'hr_at_k': hr_curve(rank_hosts_ranks, max_k),
-            'mrr': mrr(rank_hosts_ranks),
         },
         'rank_phages': {
             'n_pairs': len(rank_phages_ranks),
-            'n_pairs_scored': n_phages_scored,
-            'n_phages': len(all_phages),
-            'n_hosts': len(all_hosts),
             'hr_at_k': hr_curve(rank_phages_ranks, max_k),
             'mrr': mrr(rank_phages_ranks),
+            'n_hosts_with_pos': len(host_anyhit_ranks),
+            'hr_at_k_any_hit': hr_curve(host_anyhit_ranks, max_k),
+            'mrr_any_hit': mrr(host_anyhit_ranks),
+            'n_phages': len(all_phages),
+            'n_hosts': len(all_hosts),
         },
     }

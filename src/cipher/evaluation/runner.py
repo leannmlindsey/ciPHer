@@ -305,8 +305,25 @@ def main():
     parser = argparse.ArgumentParser(
         description='Evaluate a ciPHer experiment against validation datasets.')
     parser.add_argument(
-        'run_dir',
-        help='Path to the run directory (must have predict.py in or above it)')
+        'run_dir', nargs='?',
+        help='Path to the run directory (must have predict.py in or above it). '
+             'Omit when using --k-experiment-dir + --o-experiment-dir for '
+             'dual-head evaluation.')
+    parser.add_argument(
+        '--k-experiment-dir',
+        help='Dual-head mode: take K head from this experiment dir. '
+             'Pair with --o-experiment-dir, --k-val-embedding-file, '
+             '--o-val-embedding-file. K and O may use different '
+             'embedding families (e.g. K=ProtT5 mean, O=ESM-2 mean).')
+    parser.add_argument(
+        '--o-experiment-dir',
+        help='Dual-head mode: take O head from this experiment dir.')
+    parser.add_argument(
+        '--k-val-embedding-file',
+        help='Dual-head mode: validation embedding NPZ for the K head.')
+    parser.add_argument(
+        '--o-val-embedding-file',
+        help='Dual-head mode: validation embedding NPZ for the O head.')
     parser.add_argument(
         '--val-fasta',
         help='Path to validation protein FASTA (for pid->md5 mapping). '
@@ -360,29 +377,79 @@ def main():
         help='Suppress progress output')
     args = parser.parse_args()
 
-    run_dir = os.path.abspath(args.run_dir)
     verbose = not args.quiet
 
-    if verbose:
-        print(f'Loading predictor from {run_dir}')
-    predictor = load_predictor(run_dir)
-    predictor.score_normalization = args.score_norm
-    predictor.head_mode = args.head_mode
+    # Decide single-head vs dual-head mode by which flags were given.
+    dual_mode = bool(args.k_experiment_dir or args.o_experiment_dir)
+    if dual_mode:
+        # Both K and O dirs required in dual mode. Embedding files
+        # required too (no config.yaml fallback — there's no single
+        # "the run dir" for dual mode).
+        missing = [name for name, val in [
+            ('--k-experiment-dir', args.k_experiment_dir),
+            ('--o-experiment-dir', args.o_experiment_dir),
+            ('--k-val-embedding-file', args.k_val_embedding_file),
+            ('--o-val-embedding-file', args.o_val_embedding_file),
+        ] if not val]
+        if missing:
+            parser.error(
+                f'Dual-head mode requires all of: --k-experiment-dir, '
+                f'--o-experiment-dir, --k-val-embedding-file, '
+                f'--o-val-embedding-file. Missing: {", ".join(missing)}')
+        if args.run_dir:
+            parser.error(
+                'Cannot pass positional run_dir together with '
+                '--k-experiment-dir / --o-experiment-dir.')
+        run_dir = None  # No single run dir in dual mode
+    else:
+        if not args.run_dir:
+            parser.error('Either supply run_dir, or use dual-head flags.')
+        run_dir = os.path.abspath(args.run_dir)
+
+    if dual_mode:
+        from cipher.evaluation.dual_head_predictor import build_dual_head_predictor
+        from cipher.data.embeddings import load_embeddings
+        if verbose:
+            print(f'Loading dual-head predictor:')
+            print(f'  K from: {args.k_experiment_dir}')
+            print(f'  O from: {args.o_experiment_dir}')
+            print(f'  K embeddings: {args.k_val_embedding_file}')
+            print(f'  O embeddings: {args.o_val_embedding_file}')
+        k_emb_dict = load_embeddings(args.k_val_embedding_file)
+        o_emb_dict = load_embeddings(args.o_val_embedding_file)
+        predictor = build_dual_head_predictor(
+            k_experiment_dir=args.k_experiment_dir,
+            o_experiment_dir=args.o_experiment_dir,
+            k_emb_dict=k_emb_dict,
+            o_emb_dict=o_emb_dict,
+            score_normalization=args.score_norm,
+        )
+    else:
+        if verbose:
+            print(f'Loading predictor from {run_dir}')
+        predictor = load_predictor(run_dir)
+        predictor.score_normalization = args.score_norm
+        predictor.head_mode = args.head_mode
 
     if verbose:
         print(f'  Embedding type: {predictor.embedding_type}')
 
-    # Resolve validation paths: CLI args > config.yaml > defaults
+    # Resolve validation paths: CLI args > config.yaml > defaults.
+    # In dual mode, val_embedding_file is irrelevant (the predictor
+    # carries its own per-head embedding dicts), but FASTA + datasets
+    # dir are still required for pid->md5 mapping and ranking pools.
     import yaml
-    config_path = os.path.join(run_dir, 'config.yaml')
     val_cfg = {}
-    if os.path.exists(config_path):
-        with open(config_path) as f:
-            full_cfg = yaml.safe_load(f) or {}
-        val_cfg = full_cfg.get('validation', {})
+    if not dual_mode:
+        config_path = os.path.join(run_dir, 'config.yaml')
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                full_cfg = yaml.safe_load(f) or {}
+            val_cfg = full_cfg.get('validation', {})
 
     # Find project root for resolving relative paths
-    project_root = find_project_root(run_dir) or os.getcwd()
+    project_root_anchor = run_dir if not dual_mode else args.k_experiment_dir
+    project_root = find_project_root(project_root_anchor) or os.getcwd()
 
     def resolve_path(cli_val, config_key, default):
         """Pick CLI > config > default, and resolve relative paths."""
@@ -394,25 +461,47 @@ def main():
     val_fasta = resolve_path(
         args.val_fasta, 'val_fasta',
         'data/validation_data/metadata/validation_rbps_all.faa')
-    val_embedding_file = resolve_path(
-        args.val_embedding_file, 'val_embedding_file',
-        'data/validation_data/embeddings/esm2_650m_md5.npz')
-    val_embedding_file_2 = resolve_path(
-        args.val_embedding_file_2, 'val_embedding_file_2', None)
     val_datasets_dir = resolve_path(
         args.val_datasets_dir, 'val_datasets_dir',
         'data/validation_data/HOST_RANGE')
 
-    if verbose:
-        print(f'Validation paths:')
-        print(f'  FASTA:      {val_fasta}')
-        print(f'  Embeddings: {val_embedding_file}')
-        if val_embedding_file_2:
-            print(f'  + second:   {val_embedding_file_2}')
-        print(f'  Datasets:   {val_datasets_dir}')
-
-    val_data = load_validation_data(val_fasta, val_embedding_file, val_datasets_dir,
-                                    val_embedding_file_2=val_embedding_file_2)
+    if dual_mode:
+        # Skip the standard load_validation_data call: it would load a
+        # single embedding NPZ. We already loaded both per-head dicts
+        # above. Build val_data manually with a placeholder emb_dict
+        # (the predictor's score_phage_md5s ignores it in dual mode).
+        from cipher.data.proteins import load_fasta_md5
+        if verbose:
+            print(f'Validation paths:')
+            print(f'  FASTA:      {val_fasta}')
+            print(f'  K embedding: {args.k_val_embedding_file}')
+            print(f'  O embedding: {args.o_val_embedding_file}')
+            print(f'  Datasets:   {val_datasets_dir}')
+        pid_md5 = load_fasta_md5(val_fasta)
+        available = [d for d in DATASETS
+                     if os.path.isdir(os.path.join(val_datasets_dir, d))]
+        val_data = {
+            'emb_dict': {},   # placeholder, not consulted in dual mode
+            'pid_md5': pid_md5,
+            'hr_dir': val_datasets_dir,
+            'available_datasets': available,
+        }
+    else:
+        val_embedding_file = resolve_path(
+            args.val_embedding_file, 'val_embedding_file',
+            'data/validation_data/embeddings/esm2_650m_md5.npz')
+        val_embedding_file_2 = resolve_path(
+            args.val_embedding_file_2, 'val_embedding_file_2', None)
+        if verbose:
+            print(f'Validation paths:')
+            print(f'  FASTA:      {val_fasta}')
+            print(f'  Embeddings: {val_embedding_file}')
+            if val_embedding_file_2:
+                print(f'  + second:   {val_embedding_file_2}')
+            print(f'  Datasets:   {val_datasets_dir}')
+        val_data = load_validation_data(
+            val_fasta, val_embedding_file, val_datasets_dir,
+            val_embedding_file_2=val_embedding_file_2)
 
     if verbose:
         print(f'Evaluating on: {", ".join(args.datasets or val_data["available_datasets"])}')
@@ -426,7 +515,14 @@ def main():
     # Save results
     output_path = args.output
     if output_path is None:
-        results_dir = os.path.join(run_dir, 'results')
+        if dual_mode:
+            # No single run dir; default to a sibling under the K dir.
+            results_dir = os.path.join(args.k_experiment_dir,
+                                       'results_dual_with_o_from_'
+                                       + os.path.basename(
+                                           args.o_experiment_dir.rstrip('/')))
+        else:
+            results_dir = os.path.join(run_dir, 'results')
         os.makedirs(results_dir, exist_ok=True)
         output_path = os.path.join(results_dir, 'evaluation.json')
 

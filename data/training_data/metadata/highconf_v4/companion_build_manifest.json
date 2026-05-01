@@ -1,0 +1,38 @@
+{
+  "build_script": "scripts/data_prep/build_v4_companion_files.py",
+  "inputs": {
+    "candidates.faa": {
+      "sha256": "755e016fe79e7d3dffbbbf1007dedac86511392e571e7af30f3a245fabb234f9",
+      "n_records": 143240
+    },
+    "candidates_clusters.tsv": {
+      "sha256": "5cf62d15766399fe7a09403d1b32e5b98be5bc5b19c9e6025bd1a6953125ecd1",
+      "n_rows": 143240
+    },
+    "glycan_binders_custom.tsv": {
+      "sha256": "b1aa8bac81d2561b2a145e6ca937625ec8d1d2e3de2d74e63b8583786b811291",
+      "n_rows": 158213
+    },
+    "candidates_v4_additions.faa": {
+      "sha256": "8081d314c14cfce12074fea2b7b93448854ef16e07c02900122be16d01945c4b",
+      "n_records": 1067
+    }
+  },
+  "outputs": {
+    "candidates_v4.faa": {
+      "sha256": "bc759c074aa009d77031068c8159b020c0e314fad1225c1a6203fd5efc178a6c",
+      "n_records": 144307
+    },
+    "candidates_clusters_v4.tsv": {
+      "sha256": "4c9dd91edd48aa6b71a58433da3e47eca0b99fef2b8fd0b4200ee954dc705481",
+      "n_rows": 144307,
+      "cluster_strategy": "singleton \u2014 new IDs assigned unique cl{30..95}_<next_avail> per threshold"
+    },
+    "glycan_binders_v4.tsv": {
+      "sha256": "c3f483ab9e1a08a76c285b9d7c7a9317c152904d3ba59b1269be8107ed26603c",
+      "n_rows": 159280,
+      "tool_flag_strategy": "all 8 tool flags = 1, total_sources = 8 \u2014 TropiSEQ training proteins are RBPs by definition"
+    }
+  },
+  "next_step": "Use these companion files alongside agent 4's highconf_v4/pipeline_positive_v4.list and host_phage_protein_map_v4.tsv. Embed candidates_v4_additions.faa with ProtT5 mean and ProtT5 xl seg8, then merge into the training NPZs at training time (or pre-merge once)."
+}
