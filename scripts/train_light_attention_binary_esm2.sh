@@ -58,11 +58,27 @@ TRAIN_EMB="${TRAIN_EMB:-/work/hdd/bfzj/llindsey1/embeddings_full/split_embedding
 VAL_EMB="${VAL_EMB:-/work/hdd/bfzj/llindsey1/val_esm2_650m_full/validation_esm2_full_md5.npz}"
 EMBEDDING_TYPE="${EMBEDDING_TYPE:-esm2_650m_full}"
 
-# Training-set filter: highconf_pipeline_positive_K (12,481 proteins).
-# This is the current best filter per agent 1's notes (2026-04-22) — the
-# list already encodes cluster-level filtering, so no --cluster_file or
-# per-K/O caps are used.
+# Training-set filter. Two recipes supported via env vars:
+#
+#   (1) v1 highconf  -- single positive list, no cluster, no caps.
+#       Default below: POSITIVE_LIST=highconf_pipeline_positive_K.list
+#       (12,481 proteins). Per agent 5's 2026-04-25 finding, v1 highconf
+#       PHL classifier ~= retrieval; doesn't beat embedding nearest-neighbour.
+#
+#   (2) posList + cl70 (recommended for PHL-targeted runs)
+#       POSITIVE_LIST=pipeline_positive.list (~59K proteins)
+#       CLUSTER_FILE=candidates_clusters.tsv  CLUSTER_THRESHOLD=70
+#       MAX_SAMPLES_K=1000  MAX_SAMPLES_O=3000
+#       This is what every cl70-suffixed leaderboard run uses.
 POSITIVE_LIST="${POSITIVE_LIST:-${DATA_DIR}/training_data/metadata/highconf_pipeline_positive_K.list}"
+# Cluster-stratified downsampling. Empty / unset = OFF (the v1 highconf
+# recipe). For posList+cl70: set CLUSTER_FILE + CLUSTER_THRESHOLD.
+CLUSTER_FILE="${CLUSTER_FILE:-}"
+CLUSTER_THRESHOLD="${CLUSTER_THRESHOLD:-70}"
+# Per-class downsampling caps. Empty / unset = OFF (the highconf recipe).
+# For posList+cl70: set MAX_SAMPLES_K=1000 MAX_SAMPLES_O=3000.
+MAX_SAMPLES_K="${MAX_SAMPLES_K:-}"
+MAX_SAMPLES_O="${MAX_SAMPLES_O:-}"
 
 # ============================================================
 # Model / training config (overridable via env)
@@ -86,13 +102,17 @@ C_TERMINAL_CROP="${C_TERMINAL_CROP:-}"
 # (cosine from step 1). Try 5-10 when using POOLER_TYPE=transformer.
 WARMUP_EPOCHS="${WARMUP_EPOCHS:-}"
 
-# Default run name encodes the architecture variant so A/B comparisons sort
-# together in experiments/light_attention_binary/.
+# Default run name encodes (filter recipe + architecture) so A/B
+# comparisons sort together in experiments/light_attention_binary/.
+FILTER_LABEL="highconf_pipeline"
+if [ -n "${CLUSTER_FILE}" ]; then
+    FILTER_LABEL="posList_cl${CLUSTER_THRESHOLD}"
+fi
 NAME_SUFFIX="${POOLER_TYPE}"
 if [ -n "${C_TERMINAL_CROP}" ]; then
     NAME_SUFFIX="${NAME_SUFFIX}_crop${C_TERMINAL_CROP}"
 fi
-NAME="${NAME:-lab_${EMBEDDING_TYPE}_highconf_pipeline_${NAME_SUFFIX}}"
+NAME="${NAME:-lab_${EMBEDDING_TYPE}_${FILTER_LABEL}_${NAME_SUFFIX}}"
 DRY_RUN="${DRY_RUN:-0}"
 
 # ============================================================
@@ -106,12 +126,19 @@ echo "  Embedding:      ${EMBEDDING_TYPE}"
 echo "  Train emb:      ${TRAIN_EMB}"
 echo "  Val emb:        ${VAL_EMB}"
 echo "  Positive list:  ${POSITIVE_LIST}"
+echo "  Cluster file:   ${CLUSTER_FILE:-none} (threshold=${CLUSTER_THRESHOLD})"
+echo "  Per-K cap:      ${MAX_SAMPLES_K:-none}"
+echo "  Per-O cap:      ${MAX_SAMPLES_O:-none}"
 echo "  Pooler:         ${POOLER_TYPE}"
 echo "  C-term crop:    ${C_TERMINAL_CROP:-none}"
 echo "============================================================"
 
-for f in "${TRAIN_EMB}" "${ASSOC_MAP}" "${GLYCAN_BINDERS}" "${VAL_FASTA}" \
-         "${POSITIVE_LIST}"; do
+REQUIRED_PATHS=("${TRAIN_EMB}" "${ASSOC_MAP}" "${GLYCAN_BINDERS}" "${VAL_FASTA}" \
+                "${POSITIVE_LIST}")
+if [ -n "${CLUSTER_FILE}" ]; then
+    REQUIRED_PATHS+=("${CLUSTER_FILE}")
+fi
+for f in "${REQUIRED_PATHS[@]}"; do
     if [ ! -e "${f}" ] && [ "${DRY_RUN}" != "1" ]; then
         echo "ERROR: required path missing: ${f}" >&2
         exit 1
@@ -132,6 +159,15 @@ if [ -n "${C_TERMINAL_CROP}" ]; then
 fi
 if [ -n "${WARMUP_EPOCHS}" ]; then
     EXTRA_FLAGS="${EXTRA_FLAGS} --warmup_epochs ${WARMUP_EPOCHS}"
+fi
+if [ -n "${CLUSTER_FILE}" ]; then
+    EXTRA_FLAGS="${EXTRA_FLAGS} --cluster_file ${CLUSTER_FILE} --cluster_threshold ${CLUSTER_THRESHOLD}"
+fi
+if [ -n "${MAX_SAMPLES_K}" ]; then
+    EXTRA_FLAGS="${EXTRA_FLAGS} --max_samples_per_k ${MAX_SAMPLES_K}"
+fi
+if [ -n "${MAX_SAMPLES_O}" ]; then
+    EXTRA_FLAGS="${EXTRA_FLAGS} --max_samples_per_o ${MAX_SAMPLES_O}"
 fi
 
 TRAIN_CMD="python -m cipher.cli.train_runner \
