@@ -423,41 +423,97 @@ def train_head(head_name, X_train, y_train, X_val, y_val, X_test, y_test,
     return history
 
 
+def _md5s_with_labels(labels, md5_list):
+    """Subset of md5_list whose label rows have at least one nonzero entry."""
+    keep = (labels > 0).any(axis=1)
+    return [m for m, k in zip(md5_list, keep) if k]
+
+
+def _prep_data_for_head(head_name, base_exp_cfg, head_positive_list_path,
+                        association_map, glycan_binders, experiment_dir):
+    """Run prepare_training_data with a head-specific positive_list override.
+
+    Returns the resulting TrainingData. Saves a head-suffixed copy of the
+    summary so both per-head datasets are inspectable in the experiment dir.
+    """
+    head_cfg = dict(base_exp_cfg)
+    if head_positive_list_path:
+        head_cfg['positive_list_path'] = head_positive_list_path
+        # Per-head lists already encode tool/cluster filtering -- clear any
+        # mutex-conflicting fields that may have come in from base config.
+        head_cfg.pop('tools', None)
+        head_cfg.pop('exclude_tools', None)
+        head_cfg.pop('protein_set', None)
+    training_config = TrainingConfig.from_dict(head_cfg)
+    td = prepare_training_data(training_config, association_map, glycan_binders)
+    head_dir = os.path.join(experiment_dir, f'training_data_{head_name}')
+    os.makedirs(head_dir, exist_ok=True)
+    td.save(head_dir)
+    return td
+
+
 def train(experiment_dir, config):
-    """Train both K and O heads for the LightAttentionBinary model."""
+    """Train both K and O heads for the LightAttentionBinary model.
+
+    Two filter modes:
+      * Single-list (legacy): one `positive_list` (or tool filter) drives
+        the training pool for both heads. K and O training sets are the
+        intersection of the same pool with proteins having a K or O label.
+      * Per-head: `positive_list_k` and `positive_list_o` are set; each
+        head trains on a separately-filtered pool. Required to use the
+        v2/v3/v4 highconf-style per-head lists where K and O coverage
+        differs deliberately (e.g. HC_K_UAT_multitop + HC_O_UAT_multitop).
+    """
     train_cfg = config.get('training', {})
     data_cfg = config.get('data', {})
     exp_cfg = config.get('experiment', {})
     seed = train_cfg.get('seed', 42)
+
+    pl_k = data_cfg.get('positive_list_k_path') or exp_cfg.get('positive_list_k_path')
+    pl_o = data_cfg.get('positive_list_o_path') or exp_cfg.get('positive_list_o_path')
+    per_head_mode = bool(pl_k and pl_o)
 
     print('=' * 70)
     print('TRAINING LightAttentionBinary')
     print('=' * 70)
     print(f'  Experiment dir: {experiment_dir}')
     print(f'  Seed: {seed}')
+    print(f'  Filter mode: {"per-head" if per_head_mode else "single-list"}')
+    if per_head_mode:
+        print(f'    K positive list: {pl_k}')
+        print(f'    O positive list: {pl_o}')
 
     print('\nStep 1: Preparing training data...')
-    training_config = TrainingConfig.from_dict(exp_cfg)
-    td = prepare_training_data(
-        training_config,
-        data_cfg.get('association_map',
-                     'data/training_data/metadata/host_phage_protein_map.tsv'),
-        data_cfg.get('glycan_binders',
-                     'data/training_data/metadata/glycan_binders_custom.tsv'),
-    )
-    td.save(experiment_dir)
+    assoc_map = data_cfg.get(
+        'association_map',
+        'data/training_data/metadata/host_phage_protein_map.tsv')
+    glycan = data_cfg.get(
+        'glycan_binders',
+        'data/training_data/metadata/glycan_binders_custom.tsv')
+
+    if per_head_mode:
+        td_k = _prep_data_for_head('k', exp_cfg, pl_k, assoc_map, glycan,
+                                    experiment_dir)
+        td_o = _prep_data_for_head('o', exp_cfg, pl_o, assoc_map, glycan,
+                                    experiment_dir)
+        print(f'  K dataset: {len(td_k.md5_list)} MD5s, '
+              f'{len(td_k.k_classes)} K classes')
+        print(f'  O dataset: {len(td_o.md5_list)} MD5s, '
+              f'{len(td_o.o_classes)} O classes')
+    else:
+        training_config = TrainingConfig.from_dict(exp_cfg)
+        td = prepare_training_data(training_config, assoc_map, glycan)
+        td.save(experiment_dir)
+        td_k = td_o = td
+
+    md5_to_idx_k = {m: i for i, m in enumerate(td_k.md5_list)}
+    md5_to_idx_o = {m: i for i, m in enumerate(td_o.md5_list)}
 
     print('\nStep 2: Creating independent K and O splits...')
 
-    def md5s_with_labels(labels, md5_list):
-        keep = (labels > 0).any(axis=1)
-        return [m for m, k in zip(md5_list, keep) if k]
-
-    md5_to_idx_full = {m: i for i, m in enumerate(td.md5_list)}
-
     set_seed(seed)
-    k_md5s = md5s_with_labels(td.k_labels, td.md5_list)
-    primary_k = [td.k_classes[int(td.k_labels[md5_to_idx_full[m]].argmax())]
+    k_md5s = _md5s_with_labels(td_k.k_labels, td_k.md5_list)
+    primary_k = [td_k.k_classes[int(td_k.k_labels[md5_to_idx_k[m]].argmax())]
                  for m in k_md5s]
     splits_k = create_stratified_split(
         k_md5s, primary_k,
@@ -471,8 +527,8 @@ def train(experiment_dir, config):
           f'(of {len(k_md5s)} K-labeled MD5s)')
 
     set_seed(seed + 1)
-    o_md5s = md5s_with_labels(td.o_labels, td.md5_list)
-    primary_o = [td.o_classes[int(td.o_labels[md5_to_idx_full[m]].argmax())]
+    o_md5s = _md5s_with_labels(td_o.o_labels, td_o.md5_list)
+    primary_o = [td_o.o_classes[int(td_o.o_labels[md5_to_idx_o[m]].argmax())]
                  for m in o_md5s]
     splits_o = create_stratified_split(
         o_md5s, primary_o,
@@ -494,49 +550,56 @@ def train(experiment_dir, config):
     emb_file = data_cfg.get(
         'embedding_file',
         'data/training_data/embeddings/esm2_650m_full_md5.npz')
-    md5_set = set(td.md5_list)
+    # Load the union -- both heads use the same emb_dict but only their
+    # own MD5s actually get touched.
+    md5_set = set(td_k.md5_list) | set(td_o.md5_list)
     emb_dict = load_embeddings_or_bins(emb_file, md5_filter=md5_set)
     print(f'  Loaded {len(emb_dict)} embeddings from {emb_file}')
 
-    # Hard-fail if the embedding file doesn't cover at least this fraction
-    # of each split. Prevents silently training on 14% of the intended set
-    # (see 2026-04-21 notebook entry). Set to 0 to disable.
     min_coverage = float(train_cfg.get('min_embedding_coverage', 0.5))
 
-    def build_arrays(split_md5s, labels, split_name):
+    def _build_arrays(split_md5s, labels, md5_to_idx, split_name):
         valid = check_embedding_coverage(
             split_md5s, emb_dict, min_coverage, split_name, emb_file)
-        # Drop anything not in md5_to_idx_full (should be impossible by
-        # construction of splits, but keeps the indexing safe).
-        valid = [m for m in valid if m in md5_to_idx_full]
+        valid = [m for m in valid if m in md5_to_idx]
         X = [emb_dict[m] for m in valid]
-        idxs = [md5_to_idx_full[m] for m in valid]
+        idxs = [md5_to_idx[m] for m in valid]
         y = labels[idxs]
         return X, y
 
     print('\nStep 4: Training K head...')
     set_seed(seed)
-    X_train_k, y_train_k = build_arrays(splits_k['train'], td.k_labels, 'k/train')
-    X_val_k, y_val_k = build_arrays(splits_k['val'], td.k_labels, 'k/val')
-    X_test_k, y_test_k = build_arrays(splits_k['test'], td.k_labels, 'k/test')
+    X_train_k, y_train_k = _build_arrays(splits_k['train'], td_k.k_labels,
+                                          md5_to_idx_k, 'k/train')
+    X_val_k, y_val_k = _build_arrays(splits_k['val'], td_k.k_labels,
+                                      md5_to_idx_k, 'k/val')
+    X_test_k, y_test_k = _build_arrays(splits_k['test'], td_k.k_labels,
+                                        md5_to_idx_k, 'k/test')
     train_head('k', X_train_k, y_train_k, X_val_k, y_val_k, X_test_k, y_test_k,
-               td.k_classes, config, os.path.join(experiment_dir, 'model_k'))
+               td_k.k_classes, config, os.path.join(experiment_dir, 'model_k'))
 
     print('\nStep 5: Training O head...')
     set_seed(seed)
-    X_train_o, y_train_o = build_arrays(splits_o['train'], td.o_labels, 'o/train')
-    X_val_o, y_val_o = build_arrays(splits_o['val'], td.o_labels, 'o/val')
-    X_test_o, y_test_o = build_arrays(splits_o['test'], td.o_labels, 'o/test')
+    X_train_o, y_train_o = _build_arrays(splits_o['train'], td_o.o_labels,
+                                          md5_to_idx_o, 'o/train')
+    X_val_o, y_val_o = _build_arrays(splits_o['val'], td_o.o_labels,
+                                      md5_to_idx_o, 'o/val')
+    X_test_o, y_test_o = _build_arrays(splits_o['test'], td_o.o_labels,
+                                        md5_to_idx_o, 'o/test')
     train_head('o', X_train_o, y_train_o, X_val_o, y_val_o, X_test_o, y_test_o,
-               td.o_classes, config, os.path.join(experiment_dir, 'model_o'))
+               td_o.o_classes, config, os.path.join(experiment_dir, 'model_o'))
 
     from cipher.provenance import capture_provenance
     experiment_meta = {
         'model': 'light_attention_binary',
         'config': config,
-        'n_md5s': len(td.md5_list),
-        'n_k_classes': len(td.k_classes),
-        'n_o_classes': len(td.o_classes),
+        'filter_mode': 'per_head' if per_head_mode else 'single_list',
+        'positive_list_k_path': pl_k,
+        'positive_list_o_path': pl_o,
+        'n_md5s_k': len(td_k.md5_list),
+        'n_md5s_o': len(td_o.md5_list),
+        'n_k_classes': len(td_k.k_classes),
+        'n_o_classes': len(td_o.o_classes),
         'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
         'provenance': capture_provenance(),
     }

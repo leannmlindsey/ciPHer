@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
 #
+# !!! WARNING: ProtT5-XL FULL EMBEDDINGS DELETED 2026-05-03 !!!
+# The training and validation per-residue NPZs at
+#   /work/hdd/bfzj/llindsey1/prott5_xl_full/...
+#   /work/hdd/bfzj/llindsey1/val_prott5_xl_full/...
+# were removed to free disk quota. This script will fail at the
+# pre-submit path check until the embeddings are re-extracted.
+# Use scripts/train_light_attention_binary_esm2.sh for any new
+# "full per-residue" runs. The existing ProtT5 strict-eval result
+# (lab_prott5_xl_full_highconf_pipeline; PHL OR=0.34) stands as the
+# final ProtT5-full data point.
+#
 # Submit a SLURM job on Delta-AI that trains LightAttentionBinary (K head +
 # O head, sequentially) on ProtT5-XL per-residue (full) embeddings using
 # the highconf_pipeline_positive_K positive list, then runs cipher-evaluate.
 #
-# Why ProtT5: per agent 1's 2026-04-22 notes, ProtT5 separates K-types
-# ~8x better than ESM-2 in the within/between cosine-gap analysis, and
-# wins on PHL rh@1 in every attention_mlp sweep. This is the variant we
-# expect to move the PHL number.
+# Why ProtT5 (historical): per agent 1's 2026-04-22 notes, ProtT5 separates
+# K-types ~8x better than ESM-2 in the within/between cosine-gap analysis on
+# MEAN embeddings. We tested per-residue + ConvAttn -- it underperformed
+# ESM-2 in our architecture (ProtT5 PHL OR=0.34, ESM-2 PHL OR=0.41).
 #
 # Filter rationale: same as the ESM-2 script — highconf_pipeline_positive_K
 # already encodes the cluster-level filter, so no --cluster_file or per-K
@@ -143,7 +154,9 @@ TRAIN_CMD="python -m cipher.cli.train_runner \
     --name ${NAME}"
 
 EXP_DIR="${CIPHER_DIR}/experiments/${MODEL}/${NAME}"
-EVAL_CMD="python -m cipher.evaluation.runner ${EXP_DIR} --val-embedding-file ${VAL_EMB}"
+# Use the new strict-denominator + any-hit eval (post-2026-04-27).
+# Legacy `cipher.evaluation.runner` is deprecated.
+EVAL_CMD="python scripts/analysis/per_head_strict_eval.py ${EXP_DIR} --val-embedding-file ${VAL_EMB}"
 
 # ============================================================
 # Assemble the job script

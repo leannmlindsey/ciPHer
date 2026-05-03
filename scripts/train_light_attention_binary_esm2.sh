@@ -71,6 +71,19 @@ EMBEDDING_TYPE="${EMBEDDING_TYPE:-esm2_650m_full}"
 #       MAX_SAMPLES_K=1000  MAX_SAMPLES_O=3000
 #       This is what every cl70-suffixed leaderboard run uses.
 POSITIVE_LIST="${POSITIVE_LIST:-${DATA_DIR}/training_data/metadata/highconf_pipeline_positive_K.list}"
+# Per-head positive lists (v2/v3/v4 highconf families). When BOTH are set,
+# train.py uses per-head training: K head trains on POSITIVE_LIST_K only,
+# O head trains on POSITIVE_LIST_O only. Mutex with POSITIVE_LIST + cluster
+# / cap flags (the per-head lists already encode cluster + cap filtering).
+# Examples:
+#   v3_uat (production baseline):
+#     POSITIVE_LIST_K=$DATA_DIR/training_data/metadata/highconf_v3_multitop/HC_K_UAT_multitop.list
+#     POSITIVE_LIST_O=$DATA_DIR/training_data/metadata/highconf_v3_multitop/HC_O_UAT_multitop.list
+#   v2 strict:
+#     POSITIVE_LIST_K=$DATA_DIR/training_data/metadata/highconf_v2/HC_K_cl95.list
+#     POSITIVE_LIST_O=$DATA_DIR/training_data/metadata/highconf_v2/HC_O_cl95_full_coverage.list
+POSITIVE_LIST_K="${POSITIVE_LIST_K:-}"
+POSITIVE_LIST_O="${POSITIVE_LIST_O:-}"
 # Cluster-stratified downsampling. Empty / unset = OFF (the v1 highconf
 # recipe). For posList+cl70: set CLUSTER_FILE + CLUSTER_THRESHOLD.
 CLUSTER_FILE="${CLUSTER_FILE:-}"
@@ -105,7 +118,18 @@ WARMUP_EPOCHS="${WARMUP_EPOCHS:-}"
 # Default run name encodes (filter recipe + architecture) so A/B
 # comparisons sort together in experiments/light_attention_binary/.
 FILTER_LABEL="highconf_pipeline"
-if [ -n "${CLUSTER_FILE}" ]; then
+if [ -n "${POSITIVE_LIST_K}" ] && [ -n "${POSITIVE_LIST_O}" ]; then
+    # Derive label from K-list filename, e.g. HC_K_UAT_multitop -> v3_uat
+    PL_BASE="$(basename "${POSITIVE_LIST_K}" .list)"
+    case "${PL_BASE}" in
+        HC_K_UAT_multitop)             FILTER_LABEL="v3_uat" ;;
+        HC_K_cl95_multitop)            FILTER_LABEL="v3_strict" ;;
+        HC_K_UAT)                      FILTER_LABEL="v2_uat" ;;
+        HC_K_cl95)                     FILTER_LABEL="v2_strict" ;;
+        HC_K_v4)                       FILTER_LABEL="v4" ;;
+        *)                             FILTER_LABEL="${PL_BASE}" ;;
+    esac
+elif [ -n "${CLUSTER_FILE}" ]; then
     FILTER_LABEL="posList_cl${CLUSTER_THRESHOLD}"
 fi
 NAME_SUFFIX="${POOLER_TYPE}"
@@ -125,7 +149,12 @@ echo "  Run name:       ${NAME}"
 echo "  Embedding:      ${EMBEDDING_TYPE}"
 echo "  Train emb:      ${TRAIN_EMB}"
 echo "  Val emb:        ${VAL_EMB}"
+if [ -n "${POSITIVE_LIST_K}" ] && [ -n "${POSITIVE_LIST_O}" ]; then
+echo "  K positive list:${POSITIVE_LIST_K}"
+echo "  O positive list:${POSITIVE_LIST_O}"
+else
 echo "  Positive list:  ${POSITIVE_LIST}"
+fi
 echo "  Cluster file:   ${CLUSTER_FILE:-none} (threshold=${CLUSTER_THRESHOLD})"
 echo "  Per-K cap:      ${MAX_SAMPLES_K:-none}"
 echo "  Per-O cap:      ${MAX_SAMPLES_O:-none}"
@@ -133,8 +162,12 @@ echo "  Pooler:         ${POOLER_TYPE}"
 echo "  C-term crop:    ${C_TERMINAL_CROP:-none}"
 echo "============================================================"
 
-REQUIRED_PATHS=("${TRAIN_EMB}" "${ASSOC_MAP}" "${GLYCAN_BINDERS}" "${VAL_FASTA}" \
-                "${POSITIVE_LIST}")
+REQUIRED_PATHS=("${TRAIN_EMB}" "${ASSOC_MAP}" "${GLYCAN_BINDERS}" "${VAL_FASTA}")
+if [ -n "${POSITIVE_LIST_K}" ] && [ -n "${POSITIVE_LIST_O}" ]; then
+    REQUIRED_PATHS+=("${POSITIVE_LIST_K}" "${POSITIVE_LIST_O}")
+else
+    REQUIRED_PATHS+=("${POSITIVE_LIST}")
+fi
 if [ -n "${CLUSTER_FILE}" ]; then
     REQUIRED_PATHS+=("${CLUSTER_FILE}")
 fi
@@ -170,9 +203,16 @@ if [ -n "${MAX_SAMPLES_O}" ]; then
     EXTRA_FLAGS="${EXTRA_FLAGS} --max_samples_per_o ${MAX_SAMPLES_O}"
 fi
 
+# Filter flags: per-head if both POSITIVE_LIST_K/_O are set, else single-list.
+if [ -n "${POSITIVE_LIST_K}" ] && [ -n "${POSITIVE_LIST_O}" ]; then
+    FILTER_FLAGS="--positive_list_k ${POSITIVE_LIST_K} --positive_list_o ${POSITIVE_LIST_O}"
+else
+    FILTER_FLAGS="--positive_list ${POSITIVE_LIST}"
+fi
+
 TRAIN_CMD="python -m cipher.cli.train_runner \
     --model ${MODEL} \
-    --positive_list ${POSITIVE_LIST} \
+    ${FILTER_FLAGS} \
     --lr ${LR} \
     --batch_size ${BATCH_SIZE} \
     --epochs ${EPOCHS} \
@@ -191,7 +231,11 @@ TRAIN_CMD="python -m cipher.cli.train_runner \
     --name ${NAME}"
 
 EXP_DIR="${CIPHER_DIR}/experiments/${MODEL}/${NAME}"
-EVAL_CMD="python -m cipher.evaluation.runner ${EXP_DIR} --val-embedding-file ${VAL_EMB}"
+# Use the new strict-denominator + any-hit eval (post-2026-04-27).
+# Legacy `cipher.evaluation.runner` is deprecated and intentionally not
+# called -- it produced numbers that were silently incompatible with the
+# headline metric and led to confusing duplicate JSONs in results/.
+EVAL_CMD="python scripts/analysis/per_head_strict_eval.py ${EXP_DIR} --val-embedding-file ${VAL_EMB}"
 
 # ============================================================
 # Assemble the job script
