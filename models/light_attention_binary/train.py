@@ -429,6 +429,29 @@ def _md5s_with_labels(labels, md5_list):
     return [m for m, k in zip(md5_list, keep) if k]
 
 
+def make_single_head_training_config_dict(base_exp_cfg, head_positive_list_path):
+    """Collapse a per-head training config (with positive_list_k/o_path)
+    into a single-list config that TrainingConfig.from_dict will accept.
+
+    `TrainingConfig.__post_init__` enforces a mutex: `positive_list_path`
+    cannot coexist with `positive_list_k_path`, `positive_list_o_path`,
+    `tools`, `exclude_tools`, or `protein_set`. When we run
+    prepare_training_data once per head, each call uses a single
+    positive_list_path (the per-head list); every conflicting field
+    inherited from the experiment-level config has to be stripped first
+    or from_dict() raises ValueError. (Hit this 2026-05-03, job 2234134.)
+
+    Returns a NEW dict; does not mutate the input.
+    """
+    head_cfg = dict(base_exp_cfg)
+    if head_positive_list_path:
+        head_cfg['positive_list_path'] = head_positive_list_path
+        for conflicting in ('positive_list_k_path', 'positive_list_o_path',
+                            'tools', 'exclude_tools', 'protein_set'):
+            head_cfg.pop(conflicting, None)
+    return head_cfg
+
+
 def _prep_data_for_head(head_name, base_exp_cfg, head_positive_list_path,
                         association_map, glycan_binders, experiment_dir):
     """Run prepare_training_data with a head-specific positive_list override.
@@ -436,14 +459,8 @@ def _prep_data_for_head(head_name, base_exp_cfg, head_positive_list_path,
     Returns the resulting TrainingData. Saves a head-suffixed copy of the
     summary so both per-head datasets are inspectable in the experiment dir.
     """
-    head_cfg = dict(base_exp_cfg)
-    if head_positive_list_path:
-        head_cfg['positive_list_path'] = head_positive_list_path
-        # Per-head lists already encode tool/cluster filtering -- clear any
-        # mutex-conflicting fields that may have come in from base config.
-        head_cfg.pop('tools', None)
-        head_cfg.pop('exclude_tools', None)
-        head_cfg.pop('protein_set', None)
+    head_cfg = make_single_head_training_config_dict(
+        base_exp_cfg, head_positive_list_path)
     training_config = TrainingConfig.from_dict(head_cfg)
     td = prepare_training_data(training_config, association_map, glycan_binders)
     head_dir = os.path.join(experiment_dir, f'training_data_{head_name}')

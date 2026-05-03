@@ -33,6 +33,7 @@ from predict import LightAttentionBinaryPredictor  # noqa: E402
 from train import (  # noqa: E402
     check_embedding_coverage,
     load_embeddings_or_bins,
+    make_single_head_training_config_dict,
     make_warmup_cosine_schedule,
 )
 
@@ -466,3 +467,59 @@ class TestWarmupCosineSchedule:
                                           min_lr_ratio=0.1)
         # At end of cosine, factor should hit the floor.
         assert fn(10) == pytest.approx(0.1, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Per-head training config collapse (TrainingConfig mutex bug regression)
+# ---------------------------------------------------------------------------
+
+class TestMakeSingleHeadTrainingConfigDict:
+    """Regression for 2026-05-03 bug (job 2234134): when v3_uat per-head
+    paths were set in exp_cfg, calling _prep_data_for_head left both the
+    per-head and single-list fields in the head config; TrainingConfig's
+    mutex check then raised ValueError. The helper must strip the
+    conflicting fields before returning."""
+
+    def test_strips_per_head_paths_when_setting_single_list(self):
+        base = {
+            'positive_list_k_path': '/data/HC_K_UAT.list',
+            'positive_list_o_path': '/data/HC_O_UAT.list',
+            'min_class_samples': 25,
+        }
+        out = make_single_head_training_config_dict(base, '/data/HC_K_UAT.list')
+        assert out['positive_list_path'] == '/data/HC_K_UAT.list'
+        assert 'positive_list_k_path' not in out
+        assert 'positive_list_o_path' not in out
+        # Other fields preserved
+        assert out['min_class_samples'] == 25
+
+    def test_strips_tool_filters_when_setting_single_list(self):
+        base = {
+            'tools': ['DepoScope', 'PhageRBPdetect'],
+            'exclude_tools': ['SpikeHunter'],
+            'protein_set': 'tsp_only',
+            'min_sources': 1,
+        }
+        out = make_single_head_training_config_dict(base, '/data/list.list')
+        assert out['positive_list_path'] == '/data/list.list'
+        assert 'tools' not in out
+        assert 'exclude_tools' not in out
+        assert 'protein_set' not in out
+        # Non-conflicting field preserved
+        assert out['min_sources'] == 1
+
+    def test_no_positive_list_passthrough(self):
+        """If head_positive_list_path is None/empty, return base config
+        unchanged (single-list legacy mode handles this elsewhere)."""
+        base = {'tools': ['DepoScope'], 'min_sources': 1}
+        out = make_single_head_training_config_dict(base, None)
+        assert out == base
+
+    def test_does_not_mutate_input(self):
+        base = {
+            'positive_list_k_path': '/k.list',
+            'positive_list_o_path': '/o.list',
+        }
+        snapshot = dict(base)
+        make_single_head_training_config_dict(base, '/k.list')
+        assert base == snapshot
