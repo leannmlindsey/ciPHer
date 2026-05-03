@@ -31,6 +31,7 @@ pytest
 
 ## Conventions
 - Always save scripts to files, never run complex code inline
+- **Never give the user `python3 -c "..."` one-liners** — multiline shell-quoted Python is fragile to copy-paste. Save to a small file under `scripts/analysis/` (or `/tmp` for one-off diagnostics) and have the user run `python <path>` instead. Same rule applies to `<<EOF` heredocs.
 - Every experiment must have config.yaml with full metadata
 - Use the shared `cipher.data` module for loading -- don't duplicate parsing code
 - Save all results as JSON with standardized keys
