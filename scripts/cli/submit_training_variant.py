@@ -133,9 +133,20 @@ def main():
     if not argv:
         sys.exit(f'ERROR: empty cli_argv after tokenization')
 
-    # First token is the script path; rest are arguments
+    # First token is the script path; rest are arguments.
+    # Cipher's provenance writes ' '.join(sys.argv), so argv[0] is the
+    # python interpreter ("python" or "/path/to/python"). We invoke
+    # python ourselves below — strip the leading interpreter token if
+    # present so we don't end up with "python python -m ...".
     script = argv[0]
     args_only = argv[1:]
+    if os.path.basename(script).startswith('python'):
+        # argv[0] was the python interpreter; the actual script (or -m flag)
+        # is argv[1]. Shift everything by one.
+        if not args_only:
+            sys.exit(f'ERROR: cli_argv has only the python interpreter')
+        script = args_only[0]
+        args_only = args_only[1:]
 
     args_only = _apply_overrides(args_only, overrides)
     args_only = _replace_name(args_only, args.name)
