@@ -26,6 +26,8 @@ JOB_NAME="kmer_attn_${TARGET}"
 LOG_DIR="${CIPHER_DIR}/scripts/_logs/kmer_attention"
 mkdir -p "$LOG_DIR"
 
+CC_JSON="${CIPHER_DIR}/scripts/analysis/crosscheck_aa20_k4_analysis32_33.json"
+
 CMD="
     source \$(conda info --base)/etc/profile.d/conda.sh
     conda activate ${CONDA_ENV}
@@ -37,6 +39,8 @@ CMD="
         --val-emb ${VAL_EMB} \
         --val-datasets-dir ${VAL_DS} \
         --target-class ${TARGET} \
+        --alphabet aa20 --k 4 \
+        --crosscheck-json ${CC_JSON} \
         --out-tsv ${OUT_TSV}
 "
 

@@ -1,0 +1,13 @@
+{
+  "analysis_32_motif": [
+    "VFRN", "FRNS", "IWKN", "WKNS",
+    "GLVE", "LVEL", "GIID", "IIDV",
+    "GDVI", "DVIN", "AEVL", "EVLN",
+    "ARSV", "RSVW", "ARTV", "RTVW", "GRSI", "RSIY",
+    "SVWL", "TVWL", "SIYI"
+  ],
+  "analysis_33_alt": [
+    "PLCE", "DPLC", "GKTH", "QKQA", "QNYT", "SHQT", "YSHQ", "PGRP",
+    "YNWD", "NYTQ", "VMPC", "CRLG", "HPWF", "CENE", "WLSM"
+  ]
+}

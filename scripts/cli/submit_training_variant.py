@@ -217,8 +217,11 @@ python -m cipher.evaluation.runner "$EXP_DIR" \\
 
 echo ""
 echo "=== Eval: per-head strict (any-hit + per-pair, all 5 datasets) ==="
+PER_PHAGE_TSV="{args.cipher_dir}/results/analysis/per_phage/per_phage_{args.name}.tsv"
+mkdir -p "$(dirname "$PER_PHAGE_TSV")"
 python {args.cipher_dir}/scripts/analysis/per_head_strict_eval.py "$EXP_DIR" \\
-    --val-embedding-file "{val_emb}"
+    --val-embedding-file "{val_emb}" \\
+    --per-phage-out "$PER_PHAGE_TSV"
 """
     with open(sbatch_path, 'w') as f:
         f.write(sbatch_content)
