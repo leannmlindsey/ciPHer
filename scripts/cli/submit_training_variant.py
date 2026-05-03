@@ -94,7 +94,7 @@ def main():
     p.add_argument('--partition', default='ghx4')
     p.add_argument('--conda-env', default='esmfold2')
     p.add_argument('--time', default='4:00:00')
-    p.add_argument('--mem', default='64G')
+    p.add_argument('--mem', default='192G')   # bumped 2026-05-03 from 64G; kmer_aa20_k4 (160k-d) + esm2_3b OOM'd at 64G during O-head training
     p.add_argument('--cpus', default='8')
     p.add_argument('--dry-run', action='store_true',
                    help='Render sbatch but do not submit')
