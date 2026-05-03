@@ -81,7 +81,7 @@ echo "============================================================"
 # v1 highconf: --positive_list points to the broader pipeline_positive list,
 # and the highconf_pipeline_K convention narrows to the K-curated subset.
 submit_variant "${KMER_BASE}" "highconf_pipeline_K_kmer_aa20_k4" \
-    --override "positive_list=${CIPHER_DIR}/data/training_data/metadata/highconf_v1/highconf_pipeline_positive_K.list" \
+    --override "positive_list=${CIPHER_DIR}/data/training_data/metadata/highconf_pipeline_positive_K.list" \
                 "tools="
 
 # v2 strict — per-head positive lists
