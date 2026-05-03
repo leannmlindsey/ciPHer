@@ -1,5 +1,14 @@
 # Highconf v4 — content-cleanup pass on v3_UAT (advisor-curated inclusions + exclusions)
 
+> **Per-head canonical files** (use these for cipher-train per-head runs):
+> - **`HC_K_v4.list`** (38,162 IDs) — K-head training pool
+> - **`HC_O_v4.list`** (37,001 IDs) — O-head training pool
+>
+> The single-list `pipeline_positive_v4.list` is retained for v1-style
+> runs that combine heads. See "Per-head split" section below.
+
+
+
 Three protein-ID list variants for **per-head independent training**,
 derived by applying advisor-curated inclusion and exclusion levers to
 the v3_UAT base. v4 is the first version where the goal is **content
@@ -101,6 +110,35 @@ stored K-prefix); no normalisation needed.
    `HC_O_UAT_multitop.list`, which is unchanged by v4 (the inclusion
    levers don't carry O-labels; A23 exclusions don't impact O). v4
    is currently a **K-side-only** content edit.
+
+## Per-head split (HC_K_v4 / HC_O_v4) — added 2026-05-03
+
+Per agent 1's 2026-05-03 ask, v4 follows the v2/v3 per-head training
+convention. Cipher-train uses two lists, one per head, with per-head
+loss masking. Motivation: finding
+`2026-04-22_k_and_o_heads_independent_on_phl.md` (4b) — losing either
+head costs ~30 % of PHL HR@1.
+
+| File | Size | Recipe |
+|---|---:|---|
+| `HC_K_v4.list` | **38,162** | `(HC_K_UAT_multitop − A23) ∪ A25 ∪ A28`  (= identical to `pipeline_positive_v4.list`; renamed for the per-head convention) |
+| `HC_O_v4.list` | **37,001** | `HC_O_UAT_multitop − (A23 ∩ HC_O_UAT_multitop)`  (177 passengers subtracted; no K-axis inclusions on O — A25/A28 lack clean O-labels) |
+
+**Why no inclusions on the O side:** A28 (TropiSEQ-unique) and A25
+(phold-NOT_flagged) candidates were extracted under K-axis logic and
+do not carry biologically-clean O-axis labels. Adding them to the
+O-head training pool would inject noise. The O-head benefits from
+v4 only via the A23 cleanup (177 passenger proteins removed from the
+v3 O pool).
+
+**Cipher-train invocation:**
+```
+--positive_list_k data/training_data/metadata/highconf_v4/HC_K_v4.list
+--positive_list_o data/training_data/metadata/highconf_v4/HC_O_v4.list
+```
+
+The single-list `pipeline_positive_v4.list` is retained for v1-style
+runs that combine heads on one list.
 
 ## Cluster augmentation method (relevant for v5 and beyond)
 

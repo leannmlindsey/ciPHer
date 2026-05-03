@@ -76,6 +76,17 @@
     },
     "candidates_clusters_v4.summary.json": {
       "sha256": "76b6eb9d30b23d3b22582fa4dde6a01d13ef8fb64eba5cb4e9865700bfbf94a1"
+    },
+    "HC_K_v4.list": {
+      "size": 38162,
+      "rule": "identical to pipeline_positive_v4.list \u2014 the per-head K-axis canonical name (v2/v3 convention)",
+      "sha256": "fbb40123842c20d55615d814f2887aff5180decc3b1cb2a8f10ff2832e49934e"
+    },
+    "HC_O_v4.list": {
+      "size": 37001,
+      "rule": "HC_O_UAT_multitop.list \u2212 (A23 passengers \u2229 HC_O_UAT_multitop) \u2014 pure cleanup, no K-axis inclusions on O (A25/A28 carry no clean O-labels)",
+      "a23_subtracted_from_hc_o_uat_multitop": 177,
+      "sha256": "554ab038c52bdb33c9f62b854a9a0f6226882dd74e3c9cd6905f8b926c55431c"
     }
   },
   "k_locus_normalisation": {
@@ -115,5 +126,10 @@
     "fresh_assignment_rule": "no-hit subset clustered among themselves at T; fresh IDs allocated starting at max(existing_at_T) + 1",
     "script": "CLAUDE_PHI_DATA_ANALYSIS/analyses/30_dataset_version_history/work/v4_build/augment_clusters.py",
     "reusable_for_v5": true
+  },
+  "per_head_design": {
+    "note": "v4 follows the v2/v3 per-head convention (separate K and O lists). HC_K_v4.list is the K-head training pool; HC_O_v4.list is the O-head training pool. Cipher-train passes them via --positive_list_k and --positive_list_o; per-head loss masking applies. The single-list pipeline_positive_v4.list is retained for v1-style runs that combine heads.",
+    "k_head_recipe": "(HC_K_UAT_multitop \u2212 A23) \u222a A25 \u222a A28",
+    "o_head_recipe": "HC_O_UAT_multitop \u2212 (A23 \u2229 HC_O_UAT_multitop)  (no inclusions \u2014 A25/A28 lack clean O-labels)"
   }
 }
