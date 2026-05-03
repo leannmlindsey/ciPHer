@@ -81,19 +81,20 @@ echo "============================================================"
 # v1 highconf: --positive_list points to the broader pipeline_positive list,
 # and the highconf_pipeline_K convention narrows to the K-curated subset.
 submit_variant "${KMER_BASE}" "highconf_pipeline_K_kmer_aa20_k4" \
-    --override "positive_list_path=${CIPHER_DIR}/data/training_data/metadata/highconf_v1/highconf_pipeline_positive_K.list"
+    --override "positive_list=${CIPHER_DIR}/data/training_data/metadata/highconf_v1/highconf_pipeline_positive_K.list" \
+                "tools="
 
 # v2 strict — per-head positive lists
 submit_variant "${KMER_BASE}" "v2_strict_kmer_aa20_k4" \
     --override "positive_list_k=${HC_V2_DIR}/HC_K_cl95.list" \
                 "positive_list_o=${HC_V2_DIR}/HC_O_cl95_full_coverage.list" \
-                "positive_list_path="
+                "tools="
 
 # v3 strict — newer per-head lists (path may differ; common location)
 submit_variant "${KMER_BASE}" "v3_strict_kmer_aa20_k4" \
     --override "positive_list_k=${HC_V3_DIR}/HC_K_cl95_multitop.list" \
                 "positive_list_o=${HC_V3_DIR}/HC_O_cl95_multitop_full_coverage.list" \
-                "positive_list_path="
+                "tools="
 
 # v4 (only if the v4 list is on disk; prints SKIP otherwise)
 V4_K_LIST="${CIPHER_DIR}/data/training_data/metadata/highconf_v4/HC_K_v4.list"
@@ -102,7 +103,7 @@ if [ -f "$V4_K_LIST" ] && [ -f "$V4_O_LIST" ]; then
     submit_variant "${KMER_BASE}" "v4_kmer_aa20_k4" \
         --override "positive_list_k=${V4_K_LIST}" \
                     "positive_list_o=${V4_O_LIST}" \
-                    "positive_list_path="
+                    "tools="
 else
     echo "  SKIP v4_kmer_aa20_k4 — v4 lists not yet on disk."
     echo "    expected: ${V4_K_LIST}"
@@ -192,12 +193,12 @@ echo "============================================================"
 submit_variant "${ESM2_3B_BASE}" "v2_strict_esm2_3b_mean" \
     --override "positive_list_k=${HC_V2_DIR}/HC_K_cl95.list" \
                 "positive_list_o=${HC_V2_DIR}/HC_O_cl95_full_coverage.list" \
-                "positive_list_path="
+                "tools="
 
 submit_variant "${ESM2_3B_BASE}" "v3_strict_esm2_3b_mean" \
     --override "positive_list_k=${HC_V3_DIR}/HC_K_cl95_multitop.list" \
                 "positive_list_o=${HC_V3_DIR}/HC_O_cl95_multitop_full_coverage.list" \
-                "positive_list_path="
+                "tools="
 fi
 
 echo ""

@@ -61,10 +61,14 @@ def _strip_flag(argv, flag):
 
 def _apply_overrides(argv, overrides):
     """Replace each `--flag value` in argv with the new value (or append
-    if absent). overrides is a dict of {flag_name_no_dashes: new_value}."""
+    if absent). overrides is a dict of {flag_name_no_dashes: new_value}.
+    Empty-string values mean: STRIP the flag (don't re-append) — useful
+    for switching between mutually-exclusive filter modes (e.g. drop
+    --tools when adding --positive_list_k)."""
     for flag, value in overrides.items():
         argv = _strip_flag(argv, flag)
-        argv.extend([f'--{flag}', str(value)])
+        if value != '':
+            argv.extend([f'--{flag}', str(value)])
     return argv
 
 
