@@ -155,6 +155,18 @@ def apply_overrides(config, args):
         config.setdefault('data', {})['embedding_file_2'] = args.embedding_file_2
     if args.val_embedding_file_2 is not None:
         config.setdefault('validation', {})['val_embedding_file_2'] = args.val_embedding_file_2
+    # Per-tower embedding overrides for multi_tower_attention_mlp.
+    # Three towers (A/B/C) each take a separate NPZ. The model's train.py
+    # reads embedding_file_a/b/c from config['data'] and val_embedding_file_a/b/c
+    # from config['validation']. These flags are no-ops for single-embedding
+    # models.
+    for letter in ('a', 'b', 'c'):
+        emb = getattr(args, f'embedding_file_{letter}', None)
+        if emb is not None:
+            config.setdefault('data', {})[f'embedding_file_{letter}'] = emb
+        val_emb = getattr(args, f'val_embedding_file_{letter}', None)
+        if val_emb is not None:
+            config.setdefault('validation', {})[f'val_embedding_file_{letter}'] = val_emb
 
     # Data path overrides
     if args.association_map is not None:
@@ -526,6 +538,20 @@ Examples:
                         help='Path to the matching second validation embedding '
                              'NPZ. Required if --embedding_file_2 is set and '
                              'evaluation will be run from the saved config.')
+    # Per-tower embedding paths for multi_tower_attention_mlp (3 towers).
+    # Ignored by single-embedding models.
+    parser.add_argument('--embedding_file_a',
+                        help='Tower A training NPZ (multi_tower_attention_mlp).')
+    parser.add_argument('--embedding_file_b',
+                        help='Tower B training NPZ (multi_tower_attention_mlp).')
+    parser.add_argument('--embedding_file_c',
+                        help='Tower C training NPZ (multi_tower_attention_mlp).')
+    parser.add_argument('--val_embedding_file_a',
+                        help='Tower A validation NPZ (multi_tower_attention_mlp).')
+    parser.add_argument('--val_embedding_file_b',
+                        help='Tower B validation NPZ (multi_tower_attention_mlp).')
+    parser.add_argument('--val_embedding_file_c',
+                        help='Tower C validation NPZ (multi_tower_attention_mlp).')
     parser.add_argument('--association_map',
                         help=f'Path to host_phage_protein_map.tsv '
                              f'(default: {fmt(d_data.get("association_map"))})')

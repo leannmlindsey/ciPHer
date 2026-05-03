@@ -1,0 +1,60 @@
+# MultiTowerAttentionMLP default configuration.
+#
+# Three identical-architecture AttentionMLP towers feeding K and O heads.
+# Tower assignment (matches train.py order):
+#   embedding_file_a -> Tower A (default: ProtT5-XL seg8, 8192-d)
+#   embedding_file_b -> Tower B (default: ESM-2 3B mean, 2560-d)
+#   embedding_file_c -> Tower C (default: kmer aa20 k4, ~160k-d sparse)
+#
+# Per-tower architecture is locked in train.py via DEFAULT_TOWER_HIDDEN_DIMS
+# = (1280, 640, 320). Tower output is 320-d; joint is 3*320 = 960-d.
+
+model:
+  # Tower-internal MLP. Last value is the tower latent dim.
+  tower_hidden_dims: [1280, 640, 320]
+  se_dim: 640
+  dropout: 0.1
+
+training:
+  batch_size: 64
+  learning_rate: 0.0001       # matches sweep_kmer_aa20_k4
+  weight_decay: 0.01
+  epochs: 200
+  patience: 30
+  seed: 42
+  train_ratio: 0.7
+  val_ratio: 0.15
+
+data:
+  association_map: data/training_data/metadata/host_phage_protein_map.tsv
+  glycan_binders: data/training_data/metadata/glycan_binders_custom.tsv
+
+  # Three embedding files (tower order). MUST be set via SLURM env vars
+  # for the actual run -- the placeholders below are just shape-of-what's-
+  # expected. Real paths live on Delta /work/hdd/.
+  embedding_file_a: /work/hdd/bfzj/llindsey1/embeddings/prott5_xl_segments8/candidates_prott5_xl_segments8_md5.npz
+  embedding_file_b: /work/hdd/bfzj/llindsey1/embeddings_esm2_3b/candidates_embeddings_md5.npz
+  embedding_file_c: /work/hdd/bfzj/llindsey1/kmer_features/candidates_aa20_k4.npz
+  embedding_type: multi_tower_prott5xlseg8_esm23b_kmeraa20
+
+experiment:
+  # Per-head positive lists (REQUIRED). Defaults to v3_uat (the production
+  # baseline: HC_K_UAT_multitop + HC_O_UAT_multitop).
+  positive_list_k_path: data/training_data/metadata/highconf_v3_multitop/HC_K_UAT_multitop.list
+  positive_list_o_path: data/training_data/metadata/highconf_v3_multitop/HC_O_UAT_multitop.list
+  label_strategy: multi_label_threshold
+  min_class_samples: 25
+  min_label_count: 1
+  min_label_fraction: 0.1
+  max_k_types: 3
+  max_o_types: 3
+  single_label: false
+
+validation:
+  # Three val NPZs (tower order). Used by the custom strict-eval script
+  # rather than cipher.evaluation.runner since the runner only loads one.
+  val_fasta: data/validation_data/metadata/validation_rbps_all.faa
+  val_datasets_dir: data/validation_data/HOST_RANGE
+  val_embedding_file_a: /work/hdd/bfzj/llindsey1/validation_embeddings/prott5_xl_segments8/validation_prott5_xl_segments8_md5.npz
+  val_embedding_file_b: /work/hdd/bfzj/llindsey1/validation_embeddings_esm2_3b/validation_embeddings_md5.npz
+  val_embedding_file_c: /work/hdd/bfzj/llindsey1/kmer_features/validation_aa20_k4.npz
