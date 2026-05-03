@@ -57,8 +57,6 @@ CLUSTER_TH="${CLUSTER_TH:-70}"
 TRAIN_EMB="/work/hdd/bfzj/llindsey1/kmer_features/candidates_aa20_k4.npz"
 VAL_EMB="/work/hdd/bfzj/llindsey1/kmer_features/validation_aa20_k4.npz"
 
-CONFIG_ABS="${CIPHER_DIR}/models/binary_mlp/base_config.yaml"
-
 MODEL="binary_mlp"
 EMB_TYPE="kmer_aa20_k4"
 
@@ -85,7 +83,6 @@ EXP_DIR="${CIPHER_DIR}/experiments/${MODEL}/${NAME}"
 
 TRAIN_CMD="python -m cipher.cli.train_runner \
     --model ${MODEL} \
-    --config ${CONFIG_ABS} \
     --positive_list ${POSITIVE_LIST} \
     --cluster_file ${CLUSTER_FILE} \
     --cluster_threshold ${CLUSTER_TH} \
