@@ -201,6 +201,35 @@ submit_variant "${ESM2_3B_BASE}" "v3_strict_esm2_3b_mean" \
                 "tools="
 fi
 
+# ────────────────────────────────────────────────────────────────────
+# PHASE 6 — ProtT5-XL pooling sweep on attention_mlp (3 jobs)
+# Added 2026-05-03 to fill leann's pooling-disentanglement matrix
+# (per her 2026-05-01-1720 handoff). Holds backbone (ProtT5-XL) and
+# architecture (attention_mlp) constant; varies only pooling.
+#
+# When all 3 finish + per_head_strict_eval emits per-phage TSVs,
+# leann computes pooling-OR within attention_mlp and compares the
+# lift to the 3-family OR ensemble's +6 pp.
+# ────────────────────────────────────────────────────────────────────
+if [ "$PHASE" = "all" ] || [ "$PHASE" = "6" ]; then
+echo "============================================================"
+echo "PHASE 6 — ProtT5-XL pooling sweep on attention_mlp (3 jobs)"
+echo "  Holds backbone + architecture constant; varies pooling."
+echo "  Diagnostic for leann's Hypothesis 3 (is diversity in pooling?)"
+echo "============================================================"
+
+PROTT5_BASE="experiments/attention_mlp/sweep_prott5_mean_cl70"
+PROTT5_SEG_EMB_ROOT="/work/hdd/bfzj/llindsey1/embeddings"
+PROTT5_SEG_VAL_ROOT="/work/hdd/bfzj/llindsey1/validation_embeddings"
+
+for SEG in 4 8 16; do
+    submit_variant "${PROTT5_BASE}" "pool_sweep_prott5_seg${SEG}" \
+        --override "embedding_type=prott5_xl_seg${SEG}" \
+                    "embedding_file=${PROTT5_SEG_EMB_ROOT}/prott5_xl_segments${SEG}/candidates_prott5_xl_segments${SEG}_md5.npz" \
+                    "val_embedding_file=${PROTT5_SEG_VAL_ROOT}/prott5_xl_segments${SEG}/validation_prott5_xl_segments${SEG}_md5.npz"
+done
+fi
+
 echo ""
 echo "============================================================"
 echo "Done. After jobs finish, refresh harvest:"
