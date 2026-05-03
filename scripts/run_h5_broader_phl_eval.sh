@@ -31,12 +31,17 @@ CIPHER_DIR="${CIPHER_DIR:-/projects/bfzj/llindsey1/PHI_TSP/ciPHer}"
 
 # H5 broader inputs
 BROAD_MAPPING="${BROAD_MAPPING:-${CIPHER_DIR}/data/validation_data/HOST_RANGE/PhageHostLearn/metadata/phage_protein_mapping_broad_phl.csv}"
+BROAD_FASTA="${BROAD_FASTA:-/projects/bfzj/llindsey1/PHI_TSP/phi_tsp/klebsiella/PI_INFO/phagehostlearn_phold_aa.fasta}"
 BROAD_PROTT5="${BROAD_PROTT5:-/work/hdd/bfzj/llindsey1/validation_embeddings/prott5_xl_segments8/validation_embeddings_broad_phl_md5.npz}"
 BROAD_ESM2_3B="${BROAD_ESM2_3B:-/work/hdd/bfzj/llindsey1/validation_embeddings_esm2_3b/validation_embeddings_broad_phl_md5.npz}"
 BROAD_KMER="${BROAD_KMER:-/work/hdd/bfzj/llindsey1/kmer_features/validation_aa20_k4_broad_phl.npz}"
 
 # Strict inputs (existing 5-dataset val tree)
 STRICT_VAL_DS="${CIPHER_DIR}/data/validation_data/HOST_RANGE"
+
+# Light Attention experiments live in a sibling worktree, not in
+# cipher/experiments/attention_mlp/.
+LA_WORKTREE="${LA_WORKTREE:-/projects/bfzj/llindsey1/PHI_TSP/cipher-light-attention}"
 
 LOG_DIR="${CIPHER_DIR}/scripts/_logs/h5_eval"
 mkdir -p "$LOG_DIR"
@@ -53,19 +58,22 @@ fi
 
 submit_eval() {
     local MODEL_KEY="$1"
-    local EXP_NAME EMB_FILE
+    local EXP_NAME EMB_FILE EXP_DIR
     case "$MODEL_KEY" in
         prott5)
             EXP_NAME="la_v3_uat_prott5_xl_seg8"
             EMB_FILE="$BROAD_PROTT5"
+            EXP_DIR="${LA_WORKTREE}/experiments/light_attention/${EXP_NAME}"
             ;;
         esm2)
             EXP_NAME="sweep_posList_esm2_3b_mean_cl70"
             EMB_FILE="$BROAD_ESM2_3B"
+            EXP_DIR="${CIPHER_DIR}/experiments/attention_mlp/${EXP_NAME}"
             ;;
         kmer)
             EXP_NAME="sweep_kmer_aa20_k4"
             EMB_FILE="$BROAD_KMER"
+            EXP_DIR="${CIPHER_DIR}/experiments/attention_mlp/${EXP_NAME}"
             ;;
         *)
             echo "WARNING: unknown MODELS key '$MODEL_KEY' (expected: prott5|esm2|kmer)" >&2
@@ -73,7 +81,6 @@ submit_eval() {
             ;;
     esac
 
-    local EXP_DIR="${CIPHER_DIR}/experiments/attention_mlp/${EXP_NAME}"
     if [[ ! -d "$EXP_DIR" ]]; then
         echo "WARNING: experiment dir missing: $EXP_DIR — skipping $MODEL_KEY" >&2
         return
@@ -128,6 +135,7 @@ submit_eval() {
 
         python ${CIPHER_DIR}/scripts/analysis/per_head_strict_eval.py ${EXP_DIR} \
             --datasets PhageHostLearn \
+            --val-fasta ${BROAD_FASTA} \
             --val-embedding-file ${EMB_FILE} \
             --val-datasets-dir \$TEMP_VAL_DS \
             --out-json ${OUT_JSON} \
