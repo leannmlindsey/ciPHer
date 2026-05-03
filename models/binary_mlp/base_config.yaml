@@ -1,0 +1,60 @@
+# BinaryOneVsRestMLP default configuration.
+#
+# Default targets the kmer_aa20_k4 baseline that motivated this model:
+# - 160000-d sparse kmer input (handled by trunk's BatchNorm1d front)
+# - multi_label_threshold strategy (BCE-with-logits per class — same loss
+#   surface as attention_mlp's kmer_aa20_k4 baseline; the structural
+#   difference vs that baseline is the per-class head capacity below
+#   the trunk).
+# - per-class pos_weight enabled by default (computed from class
+#   frequencies in train.py).
+#
+# Override any of these via cipher-train CLI args.
+
+model:
+  # Shared trunk: input_dim -> 1024 -> 256, with BatchNorm + ReLU + Dropout.
+  # An input-side BN handles the dynamic range of sparse kmer features
+  # before the first large Linear; disable via use_input_batchnorm: false
+  # for dense pLM inputs that are already well-scaled.
+  trunk_dims: [1024, 256]
+  head_hidden: 64       # per-class head: 256 -> 64 -> 1 (Linear+ReLU+Dropout+Linear)
+  use_input_batchnorm: true
+  dropout: 0.1
+
+training:
+  batch_size: 64
+  learning_rate: 0.00001
+  epochs: 200
+  patience: 30
+  seed: 42
+  train_ratio: 0.7
+  val_ratio: 0.15
+  use_pos_weight: true
+
+data:
+  association_map: data/training_data/metadata/host_phage_protein_map.tsv
+  glycan_binders: data/training_data/metadata/glycan_binders_custom.tsv
+  # Default to kmer_aa20_k4 — the baseline this model is designed to
+  # improve on. Launcher should override these explicitly.
+  embedding_type: kmer_aa20_k4
+  embedding_file: data/training_data/embeddings/kmer_aa20_k4_md5.npz
+
+validation:
+  # Paths for cipher-evaluate. Override per-environment.
+  val_fasta: data/validation_data/metadata/validation_rbps_all.faa
+  val_embedding_file: data/validation_data/embeddings/kmer_aa20_k4_md5.npz
+  val_datasets_dir: data/validation_data/HOST_RANGE
+
+experiment:
+  # binary_mlp's per-class heads don't softmax-compete across classes,
+  # so multi_label_threshold (BCE per output) is the only sensible loss.
+  # single_label is rejected by get_loss_fn().
+  label_strategy: multi_label_threshold
+  single_label: false
+  # Tool filter: see attention_mlp/base_config.yaml for documentation.
+  tools: null
+  exclude_tools: null
+  min_sources: 1
+  min_class_samples: 25
+  # No max_samples_per_k by default — launcher should set it explicitly
+  # (cap=300 was the LA sweet spot; worth testing here too).
