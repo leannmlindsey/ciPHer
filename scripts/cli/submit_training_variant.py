@@ -98,6 +98,12 @@ def main():
     p.add_argument('--cpus', default='8')
     p.add_argument('--dry-run', action='store_true',
                    help='Render sbatch but do not submit')
+    p.add_argument('--glycan-binders',
+                   default='/projects/bfzj/llindsey1/PHI_TSP/phi_tsp/klebsiella/validation_data/combined/validation_inputs/glycan_binders_custom.tsv',
+                   help='Validation glycan_binders TSV. Passed to the '
+                        'chained strict-eval so the eval RBP filter '
+                        'auto-mirrors the model\'s training filter '
+                        '(read from config.yaml:experiment).')
     args = p.parse_args()
 
     overrides = {}
@@ -221,6 +227,7 @@ PER_PHAGE_TSV="{args.cipher_dir}/results/analysis/per_phage/per_phage_{args.name
 mkdir -p "$(dirname "$PER_PHAGE_TSV")"
 python {args.cipher_dir}/scripts/analysis/per_head_strict_eval.py "$EXP_DIR" \\
     --val-embedding-file "{val_emb}" \\
+    --glycan-binders "{args.glycan_binders}" \\
     --per-phage-out "$PER_PHAGE_TSV"
 """
     with open(sbatch_path, 'w') as f:
