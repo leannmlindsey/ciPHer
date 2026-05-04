@@ -549,14 +549,6 @@ Examples:
     parser.add_argument('--name',
                         help='Custom run name (default: auto-generated from params + timestamp)')
 
-    # Eval (post-training)
-    parser.add_argument('--no-strict-eval', dest='no_strict_eval',
-                        action='store_true',
-                        help='Skip the auto per_head_strict_eval call after '
-                             'training (default: run it). Use when batching '
-                             'eval separately, e.g. HP sweeps that pool '
-                             'eval into one SLURM job.')
-
     args = parser.parse_args()
 
     # Enforce mutual exclusion early (clearer error than at config-load time)
@@ -599,12 +591,12 @@ Examples:
     train_module.train(experiment_dir, config)
 
     # Auto-run per_head_strict_eval after training. This produces the
-    # `<exp>/results/per_head_strict_eval.json` file that the harvest
-    # CSV reads for headline any-hit + per-pair columns. Skip when the
-    # caller passed --no-strict-eval (e.g. for HP sweeps that batch eval
-    # separately) or when the run has no validation embeddings configured.
-    if not getattr(args, 'no_strict_eval', False):
-        _auto_run_strict_eval(experiment_dir, config, project_root)
+    # `<exp>/results/per_head_strict_eval.json` file the harvest reads
+    # for the headline any-hit columns. Mandatory — no opt-out, so every
+    # cipher-train invocation produces a comparable headline JSON.
+    # Skipped only when validation paths aren't configured (no input
+    # surface for evaluation).
+    _auto_run_strict_eval(experiment_dir, config, project_root)
 
 
 def _auto_run_strict_eval(experiment_dir, config, project_root):
