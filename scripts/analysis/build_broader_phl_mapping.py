@@ -51,16 +51,30 @@ def parse_fasta_records(fasta_path):
     return out
 
 
-def parse_phold_tsv(tsv_path):
-    """Return dict: cds_id -> contig_id."""
+def parse_phold_tsv(tsv_path, function_filter=None):
+    """Return dict: cds_id -> contig_id, optionally filtered by phold function.
+
+    function_filter is a set of allowed `function` column values (e.g.
+    {'tail'}). If None, all CDS rows are returned.
+    """
     out = {}
+    n_total = 0
+    n_kept = 0
     with open(tsv_path) as f:
         r = csv.DictReader(f, delimiter='\t')
         for row in r:
+            n_total += 1
             cds_id = row.get('cds_id', '').strip()
             contig_id = row.get('contig_id', '').strip()
+            func = row.get('function', '').strip()
+            if function_filter is not None and func not in function_filter:
+                continue
             if cds_id and contig_id:
                 out[cds_id] = contig_id
+                n_kept += 1
+    if function_filter is not None:
+        print(f'  filter: function in {sorted(function_filter)} -> '
+              f'kept {n_kept:,} of {n_total:,} rows')
     return out
 
 
@@ -87,7 +101,15 @@ def main():
                          'for the 100 paper-aligned phages we evaluate on')
     ap.add_argument('--out', required=True,
                     help='output broader phage_protein_mapping CSV path')
+    ap.add_argument('--function-filter', default='tail',
+                    help='comma-separated phold function values to keep '
+                         '(default "tail" = the RBP-broad set; pass empty '
+                         'string to keep all CDS regardless of function)')
     args = ap.parse_args()
+
+    func_filter = None
+    if args.function_filter.strip():
+        func_filter = set(s.strip() for s in args.function_filter.split(','))
 
     print(f'[load] FASTA records from {args.fasta}')
     fasta_records = parse_fasta_records(args.fasta)
@@ -97,25 +119,30 @@ def main():
           f'(rest will fall back to phold TSV lookup)')
 
     print(f'[load] phold per-CDS TSV from {args.phold_tsv}')
-    cds_to_contig = parse_phold_tsv(args.phold_tsv)
-    print(f'  {len(cds_to_contig):,} CDS rows in phold TSV')
+    cds_to_contig = parse_phold_tsv(args.phold_tsv, function_filter=func_filter)
+    print(f'  {len(cds_to_contig):,} CDS rows kept after function filter')
 
     print(f'[load] strict mapping phages from {args.strict_mapping}')
     strict_phages = parse_strict_phages(args.strict_mapping)
     print(f'  {len(strict_phages):,} phages in strict mapping')
 
-    # Build broader mapping: every FASTA protein whose contig is one
-    # of the strict-mapping phages. Use the FASTA-header contig_id when
-    # available; otherwise look up via phold TSV.
+    # Build broader mapping: every FASTA protein that
+    #   (a) passes the phold function filter (kept in cds_to_contig), AND
+    #   (b) lives on a phage that's in the strict mapping.
     #
     # protein_id MUST match the FASTA header token exactly so the eval
     # pipeline's pid->md5 lookup succeeds. Headers are "contig:cds" form,
     # so emit "contig:cds" as protein_id (not bare cds_id).
     rows = []
     n_no_contig = 0
+    n_filtered_out = 0
     n_phage_outside_strict = 0
     by_phage = defaultdict(int)
     for contig_id, cds_id in fasta_records:
+        # Apply phold function filter: cds_id must appear in (filtered) phold TSV
+        if func_filter is not None and cds_id not in cds_to_contig:
+            n_filtered_out += 1
+            continue
         if contig_id is None:
             contig_id = cds_to_contig.get(cds_id)
             protein_id = cds_id
@@ -131,6 +158,7 @@ def main():
         by_phage[contig_id] += 1
 
     print()
+    print(f'[stats] {n_filtered_out:,} FASTA proteins dropped by phold function filter')
     print(f'[stats] {n_no_contig:,} FASTA proteins with no resolvable contig_id '
           f'(investigate if non-trivial)')
     print(f'[stats] {n_phage_outside_strict:,} FASTA proteins on phages outside '

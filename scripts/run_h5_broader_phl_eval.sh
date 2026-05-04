@@ -154,7 +154,7 @@ submit_eval() {
 
     sbatch \
         --account="$ACCOUNT" --partition="$PARTITION" \
-        --gpus-per-node=1 --cpus-per-task=4 --mem=48G --time=01:00:00 \
+        --gpus-per-node=1 --cpus-per-task=4 --mem=48G --time=04:00:00 \
         --job-name="$JOB_NAME" \
         --output="${LOG_DIR}/${JOB_NAME}_%j.log" \
         --wrap="$CMD"
