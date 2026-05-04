@@ -123,14 +123,10 @@ for CAP in $CAPS; do
         --name ${NAME}"
 
     EXP_DIR="${CIPHER_DIR}/experiments/${MODEL}/${NAME}"
-    EVAL_CMD="python -m cipher.evaluation.runner ${EXP_DIR} --val-embedding-file ${VAL_EMB}"
-    EVAL_K_CMD="python -m cipher.evaluation.runner ${EXP_DIR} --val-embedding-file ${VAL_EMB} --head-mode k_only -o ${EXP_DIR}/results/evaluation_k_only.json"
-    EVAL_O_CMD="python -m cipher.evaluation.runner ${EXP_DIR} --val-embedding-file ${VAL_EMB} --head-mode o_only -o ${EXP_DIR}/results/evaluation_o_only.json"
-    EVAL_RAW_CMD="python -m cipher.evaluation.runner ${EXP_DIR} --val-embedding-file ${VAL_EMB} --score-norm raw -o ${EXP_DIR}/results/evaluation_raw.json"
-    STRICT_EVAL_CMD="python ${CIPHER_DIR}/scripts/analysis/per_head_strict_eval.py ${EXP_DIR} \
-        --val-embedding-file ${VAL_EMB} \
-        --val-fasta ${VAL_FASTA} \
-        --val-datasets-dir ${VAL_DATASETS_DIR}"
+    # NOTE: cipher.cli.train_runner now auto-runs per_head_strict_eval after
+    # training (writes <exp>/results/per_head_strict_eval.json — the JSON the
+    # harvest CSV reads). The legacy `cipher.evaluation.runner` per-pair eval
+    # is no longer the headline metric and is dropped from launchers.
 
     JOB_SCRIPT="#!/bin/bash
 #SBATCH --job-name=${NAME:0:32}
@@ -159,47 +155,20 @@ echo \"  val emb:   ${VAL_EMB}\"
 echo \"  Started: \$(date)\"
 echo \"======================================\"
 
-VAL_READY=true
 if [ ! -f \"${VAL_EMB}\" ]; then
     echo \"WARNING: Validation embeddings not found: ${VAL_EMB}\"
-    VAL_READY=false
+    echo \"   train_runner will skip the auto strict-eval step.\"
 fi
 
 echo \"\"
-echo \"=== TRAINING ===\"
+echo \"=== TRAIN + AUTO STRICT-EVAL ===\"
 ${TRAIN_CMD}
-
-if [ \"\${VAL_READY}\" = true ]; then
-    echo \"\"
-    echo \"=== EVAL: default (zscore combined) ===\"
-    ${EVAL_CMD}
-
-    echo \"\"
-    echo \"=== EVAL: K-only ===\"
-    ${EVAL_K_CMD}
-
-    echo \"\"
-    echo \"=== EVAL: O-only ===\"
-    ${EVAL_O_CMD}
-
-    echo \"\"
-    echo \"=== EVAL: raw combined ===\"
-    ${EVAL_RAW_CMD}
-
-    echo \"\"
-    echo \"=== EVAL: per_head_strict_eval (any-hit harvest columns) ===\"
-    ${STRICT_EVAL_CMD}
-fi
 
 echo \"\"
 echo \"======================================\"
 echo \"Done: ${NAME} at \$(date)\"
-echo \"Eval JSONs saved to ${EXP_DIR}/results/:\"
-echo \"  evaluation.json              — default (zscore combined)\"
-echo \"  evaluation_k_only.json       — --head-mode k_only\"
-echo \"  evaluation_o_only.json       — --head-mode o_only\"
-echo \"  evaluation_raw.json          — --score-norm raw\"
-echo \"  per_head_strict_eval.json    — any-hit + per-pair, fixed denom\"
+echo \"Result JSON: ${EXP_DIR}/results/per_head_strict_eval.json\"
+echo \"  (any-hit + per-pair, fixed denominator — the harvest CSV reads this)\"
 echo \"======================================\"
 "
 

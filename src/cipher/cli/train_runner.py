@@ -628,6 +628,59 @@ Examples:
     train_module = load_train_module(args.model, project_root)
     train_module.train(experiment_dir, config)
 
+    # Auto-run per_head_strict_eval after training. This produces the
+    # `<exp>/results/per_head_strict_eval.json` file the harvest reads
+    # for the headline any-hit columns. Mandatory — no opt-out, so every
+    # cipher-train invocation produces a comparable headline JSON.
+    # Skipped only when validation paths aren't configured (no input
+    # surface for evaluation).
+    _auto_run_strict_eval(experiment_dir, config, project_root)
+
+
+def _auto_run_strict_eval(experiment_dir, config, project_root):
+    """Invoke scripts/analysis/per_head_strict_eval.py on a freshly-trained run.
+
+    Subprocess invocation (rather than in-process import) keeps the eval's
+    side effects — sys.path mutations, CUDA context lifecycle, predict.py
+    import — isolated from the training process. Same pattern the SLURM
+    launchers used to do explicitly; now baked in so every cipher-train
+    call produces the headline JSON without a launcher needing to chain.
+    """
+    import subprocess
+    val_cfg = config.get('validation', {})
+    val_emb = val_cfg.get('val_embedding_file')
+    val_fasta = val_cfg.get('val_fasta')
+    val_ds = val_cfg.get('val_datasets_dir')
+    if not (val_emb and val_fasta and val_ds):
+        print('\n[strict-eval] Skipping — validation paths not configured.')
+        return
+    if not os.path.exists(val_emb):
+        print(f'\n[strict-eval] Skipping — val_embedding_file not found: {val_emb}')
+        return
+
+    script = os.path.join(project_root, 'scripts', 'analysis',
+                          'per_head_strict_eval.py')
+    if not os.path.exists(script):
+        print(f'\n[strict-eval] Skipping — script not found at {script}')
+        return
+
+    cmd = [
+        sys.executable, '-u', script, experiment_dir,
+        '--val-embedding-file', val_emb,
+        '--val-fasta', val_fasta,
+        '--val-datasets-dir', val_ds,
+    ]
+    val_emb_2 = val_cfg.get('val_embedding_file_2')
+    if val_emb_2:
+        cmd += ['--val-embedding-file-2', val_emb_2]
+
+    print('\n=== Auto-running per_head_strict_eval ===')
+    print('  ' + ' '.join(cmd))
+    rc = subprocess.run(cmd, check=False).returncode
+    if rc != 0:
+        print(f'[strict-eval] WARNING: per_head_strict_eval exited {rc}; '
+              f'training itself succeeded — eval can be re-run manually.')
+
 
 if __name__ == '__main__':
     main()
