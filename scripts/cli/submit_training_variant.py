@@ -61,10 +61,14 @@ def _strip_flag(argv, flag):
 
 def _apply_overrides(argv, overrides):
     """Replace each `--flag value` in argv with the new value (or append
-    if absent). overrides is a dict of {flag_name_no_dashes: new_value}."""
+    if absent). overrides is a dict of {flag_name_no_dashes: new_value}.
+    Empty-string values mean: STRIP the flag (don't re-append) — useful
+    for switching between mutually-exclusive filter modes (e.g. drop
+    --tools when adding --positive_list_k)."""
     for flag, value in overrides.items():
         argv = _strip_flag(argv, flag)
-        argv.extend([f'--{flag}', str(value)])
+        if value != '':
+            argv.extend([f'--{flag}', str(value)])
     return argv
 
 
@@ -90,10 +94,16 @@ def main():
     p.add_argument('--partition', default='ghx4')
     p.add_argument('--conda-env', default='esmfold2')
     p.add_argument('--time', default='4:00:00')
-    p.add_argument('--mem', default='64G')
+    p.add_argument('--mem', default='192G')   # bumped 2026-05-03 from 64G; kmer_aa20_k4 (160k-d) + esm2_3b OOM'd at 64G during O-head training
     p.add_argument('--cpus', default='8')
     p.add_argument('--dry-run', action='store_true',
                    help='Render sbatch but do not submit')
+    p.add_argument('--glycan-binders',
+                   default='/projects/bfzj/llindsey1/PHI_TSP/phi_tsp/klebsiella/validation_data/combined/validation_inputs/glycan_binders_custom.tsv',
+                   help='Validation glycan_binders TSV. Passed to the '
+                        'chained strict-eval so the eval RBP filter '
+                        'auto-mirrors the model\'s training filter '
+                        '(read from config.yaml:experiment).')
     args = p.parse_args()
 
     overrides = {}
@@ -133,9 +143,20 @@ def main():
     if not argv:
         sys.exit(f'ERROR: empty cli_argv after tokenization')
 
-    # First token is the script path; rest are arguments
+    # First token is the script path; rest are arguments.
+    # Cipher's provenance writes ' '.join(sys.argv), so argv[0] is the
+    # python interpreter ("python" or "/path/to/python"). We invoke
+    # python ourselves below — strip the leading interpreter token if
+    # present so we don't end up with "python python -m ...".
     script = argv[0]
     args_only = argv[1:]
+    if os.path.basename(script).startswith('python'):
+        # argv[0] was the python interpreter; the actual script (or -m flag)
+        # is argv[1]. Shift everything by one.
+        if not args_only:
+            sys.exit(f'ERROR: cli_argv has only the python interpreter')
+        script = args_only[0]
+        args_only = args_only[1:]
 
     args_only = _apply_overrides(args_only, overrides)
     args_only = _replace_name(args_only, args.name)
@@ -202,8 +223,12 @@ python -m cipher.evaluation.runner "$EXP_DIR" \\
 
 echo ""
 echo "=== Eval: per-head strict (any-hit + per-pair, all 5 datasets) ==="
+PER_PHAGE_TSV="{args.cipher_dir}/results/analysis/per_phage/per_phage_{args.name}.tsv"
+mkdir -p "$(dirname "$PER_PHAGE_TSV")"
 python {args.cipher_dir}/scripts/analysis/per_head_strict_eval.py "$EXP_DIR" \\
-    --val-embedding-file "{val_emb}"
+    --val-embedding-file "{val_emb}" \\
+    --glycan-binders "{args.glycan_binders}" \\
+    --per-phage-out "$PER_PHAGE_TSV"
 """
     with open(sbatch_path, 'w') as f:
         f.write(sbatch_content)

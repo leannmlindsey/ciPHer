@@ -139,8 +139,9 @@ def plot_4panel(title, direction, out_path):
 
     for i, (mode, mode_label) in enumerate(MODES):
         ax = axes[i // 2, i % 2]
-        # Track per-model values at k=10 and k=20 for OR-panel annotation
-        annot_candidates = {10: [], 20: []}
+        # Track per-model values at k=1, k=10, k=20 for annotation
+        annot_ks = (1, 10, 20)
+        annot_candidates = {k: [] for k in annot_ks}
         for label, json_path, color, lw in TOP3:
             curves = load_model_curves(json_path)
             if curves is None:
@@ -151,20 +152,19 @@ def plot_4panel(title, direction, out_path):
                 continue
             ax.plot(K_VALUES, ys, color=color, lw=lw,
                     marker='o', markersize=4, label=label)
-            for k_ann in (10, 20):
+            for k_ann in annot_ks:
                 v = wcurve.get(k_ann)
                 if v is not None:
                     annot_candidates[k_ann].append((v, color))
-        # Annotate top value at k=10 and k=20 on the OR panel
-        if mode == 'or':
-            for k_ann in (10, 20):
-                if annot_candidates[k_ann]:
-                    v_top, c_top = max(annot_candidates[k_ann],
-                                        key=lambda x: x[0])
-                    ax.annotate(f'{v_top:.3f}', xy=(k_ann, v_top),
-                                xytext=(0, 8), textcoords='offset points',
-                                ha='center', fontsize=9, fontweight='bold',
-                                color=c_top)
+        # Annotate the top-value model at k=1, k=10, k=20 on every panel
+        for k_ann in annot_ks:
+            if annot_candidates[k_ann]:
+                v_top, c_top = max(annot_candidates[k_ann],
+                                    key=lambda x: x[0])
+                ax.annotate(f'{v_top:.3f}', xy=(k_ann, v_top),
+                            xytext=(0, 8), textcoords='offset points',
+                            ha='center', fontsize=8, fontweight='bold',
+                            color=c_top)
         ax.set_title(mode_label, fontsize=11, fontweight='bold')
         ax.set_xlabel('k')
         ax.set_xlim(0.5, 20.5)

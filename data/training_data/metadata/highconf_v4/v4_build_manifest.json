@@ -30,6 +30,10 @@
       "path": "/Users/leannmlindsey/WORK/CLAUDE_PHI_DATA_ANALYSIS/analyses/25_phl_phold_novel_candidates/output/advisor_review_phold_NOT_flagged_candidates.faa",
       "n_records": 10,
       "sha256": "0f17a22ae88dc41489b92199231a8a31d671edda4efd3c1891d1309defe92022"
+    },
+    "candidates_clusters.tsv": {
+      "path": "data/training_data/metadata/candidates_clusters.tsv",
+      "sha256": "5cf62d15766399fe7a09403d1b32e5b98be5bc5b19c9e6025bd1a6953125ecd1"
     }
   },
   "set_arithmetic": {
@@ -64,11 +68,68 @@
     "host_phage_protein_map_v4.tsv": {
       "n_new_rows": 1152,
       "sha256": "76e5e52e72cc562858eea28b4c605c1c7647c4e845bf6fb60d9d8fee54986ee5"
+    },
+    "candidates_clusters_v4.tsv": {
+      "rows": 144307,
+      "rule": "existing 143240 rows verbatim + 1067 new rows with mmseqs2-derived inheritance/fresh assignments at 9 thresholds (30/40/50/60/70/80/85/90/95)",
+      "sha256": "fe1e3407d674bce519c22dc0ff3c35d6cae8052a09155aea2f27313c242b6aff"
+    },
+    "candidates_clusters_v4.summary.json": {
+      "sha256": "76b6eb9d30b23d3b22582fa4dde6a01d13ef8fb64eba5cb4e9865700bfbf94a1"
+    },
+    "HC_K_v4.list": {
+      "size": 38162,
+      "rule": "identical to pipeline_positive_v4.list \u2014 the per-head K-axis canonical name (v2/v3 convention)",
+      "sha256": "fbb40123842c20d55615d814f2887aff5180decc3b1cb2a8f10ff2832e49934e"
+    },
+    "HC_O_v4.list": {
+      "size": 37001,
+      "rule": "HC_O_UAT_multitop.list \u2212 (A23 passengers \u2229 HC_O_UAT_multitop) \u2014 pure cleanup, no K-axis inclusions on O (A25/A28 carry no clean O-labels)",
+      "a23_subtracted_from_hc_o_uat_multitop": 177,
+      "sha256": "554ab038c52bdb33c9f62b854a9a0f6226882dd74e3c9cd6905f8b926c55431c"
     }
   },
   "k_locus_normalisation": {
     "rule": "TropiSEQ KL{n} \u2192 cipher K{n}",
     "rationale": "cipher's existing host_phage_protein_map has 364509 K-prefix rows vs 130831 KL-prefix rows; K is dominant. Normalising avoids 'novel K-type' silent drops."
   },
-  "primary_deliverable": "pipeline_positive_v4.list"
+  "primary_deliverable": "pipeline_positive_v4.list",
+  "inclusion_source_datasets": {
+    "A28": {
+      "name": "TropiSEQ training table (TropiGATv2.final_df_v2.tsv)",
+      "path": "/Users/leannmlindsey/WORK/PHI_TSP/DpoTropiSearch_zenoto_data/TropiGATv2.final_df_v2.tsv",
+      "corpus_size": "21,350 rows; 4,084 unique full proteins",
+      "extraction_rule": "TropiSEQ training proteins NOT exact-substring-contained in cipher candidates.faa, gated by n_distinct_KL_atoms <= 3"
+    },
+    "A25": {
+      "name": "phold predictions (phold.rmdup.faa)",
+      "path": "/Users/leannmlindsey/WORK/PHI_TSP/phi_tsp/klebsiella/data/proteins/phold.rmdup.faa",
+      "corpus_size": "1,358,730 sequences (corpus larger than pipeline_positive)",
+      "extraction_rule": "phold proteins near-twin (>=80% identity, >=80% coverage) to >= 5 PHL RBPs but flagged by NONE of cipher's 8 RBP detection tools"
+    }
+  },
+  "cluster_augmentation": {
+    "tool": "mmseqs2 easy-search (inheritance) + easy-cluster (fresh groups)",
+    "parameters": "--cov-mode 2 -c 0.8 (CD-HIT-style coverage of shorter)",
+    "thresholds": [
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      85,
+      90,
+      95
+    ],
+    "inheritance_rule": "best hit (highest bitscore, then pident) with pident >= T inherits target cluster ID at threshold T",
+    "fresh_assignment_rule": "no-hit subset clustered among themselves at T; fresh IDs allocated starting at max(existing_at_T) + 1",
+    "script": "CLAUDE_PHI_DATA_ANALYSIS/analyses/30_dataset_version_history/work/v4_build/augment_clusters.py",
+    "reusable_for_v5": true
+  },
+  "per_head_design": {
+    "note": "v4 follows the v2/v3 per-head convention (separate K and O lists). HC_K_v4.list is the K-head training pool; HC_O_v4.list is the O-head training pool. Cipher-train passes them via --positive_list_k and --positive_list_o; per-head loss masking applies. The single-list pipeline_positive_v4.list is retained for v1-style runs that combine heads.",
+    "k_head_recipe": "(HC_K_UAT_multitop \u2212 A23) \u222a A25 \u222a A28",
+    "o_head_recipe": "HC_O_UAT_multitop \u2212 (A23 \u2229 HC_O_UAT_multitop)  (no inclusions \u2014 A25/A28 lack clean O-labels)"
+  }
 }

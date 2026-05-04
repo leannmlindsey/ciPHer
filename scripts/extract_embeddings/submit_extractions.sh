@@ -61,6 +61,13 @@ VAL_EMB_ROOT="/work/hdd/bfzj/llindsey1/validation_embeddings"
 #             E.g. "--half_precision" for very large models.
 # ============================================================
 EXTRACTIONS=(
+    # ESM-2 3B seg4 / seg8 — added 2026-05-01 to test if the 650M segment
+    # lift transfers to 3B. ESM-2 3B is the K-source in the 2026-04-30
+    # best-hybrid; if seg4/seg8 boost its K-head further the hybrid lifts
+    # too. mem=192G covers (n_proteins × 4 × 2560) and (× 8 × 2560) outputs.
+    "esm2    esm2_t36_3B_UR50D              segments4   192G  1  18:00:00  -"
+    "esm2    esm2_t36_3B_UR50D              segments8   192G  1  18:00:00  -"
+
     # ESM-2 650M seg8 / seg16 — completed 2026-04-20, kept here for history:
     # "esm2    esm2_t33_650M_UR50D            segments8   64G   1  12:00:00  -"
     # "esm2    esm2_t33_650M_UR50D            segments16  64G   1  12:00:00  -"
@@ -71,6 +78,7 @@ EXTRACTIONS=(
     # MD5s (see 2026-04-21 training run: model trained on 14% of the filtered
     # set). mem=0 because the extraction holds all (L, 1280) arrays in a dict
     # before np.savez_compressed — ~60-80 GB RAM for the full candidates set.
+    # 2026-05-01: kept active since agent 3 is continuing LA-on-ESM-2 work.
     "esm2    esm2_t33_650M_UR50D            full        0     1  24:00:00  -"
 
     # ProtT5-XL segmented pooling (tests whether ProtT5's K-type signal
@@ -82,11 +90,9 @@ EXTRACTIONS=(
     "prott5  Rostlab/prot_t5_xl_uniref50    segments8   128G  1  12:00:00  --half_precision --max_length 3000"
     "prott5  Rostlab/prot_t5_xl_uniref50    segments16  128G  1  12:00:00  --half_precision --max_length 3000"
 
-    # ProtT5-XL per-residue (full) output for the Light Attention experiments.
-    # Required input shape for LA when it operates on residue-level features.
-    # Storage: ~145 GB at fp16. Single GPU, 18h wall clock is generous given
-    # that seg16 on the same model took 2h15.
-    "prott5  Rostlab/prot_t5_xl_uniref50    full        128G  1  18:00:00  --half_precision --max_length 3000"
+    # ProtT5-XL per-residue (full) — DISABLED 2026-05-01: same reason as
+    # ESM-2 650M full above. Uncomment to re-enable.
+    # "prott5  Rostlab/prot_t5_xl_uniref50    full        128G  1  18:00:00  --half_precision --max_length 3000"
 
     # ProtT5-XXL mean (11B params — does size help for ProtT5?).
     # Half precision required to fit on a single H100. max_length guard too.

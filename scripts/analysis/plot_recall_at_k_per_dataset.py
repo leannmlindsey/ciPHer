@@ -30,19 +30,24 @@ import matplotlib.pyplot as plt
 AGENT6_TSV = ('/Users/leannmlindsey/WORK/PHI_TSP/cipher-depolymerase-domain/'
               'data/recall_at_k_4way/recall_at_k_4way.tsv')
 HARVEST_CSV = 'results/experiment_log.csv'
-CIPHER_RUN_NAME = 'sweep_prott5_mean_cl70'
+CIPHER_RUN_NAME = 'sweep_kmer_aa20_k4'
 
 # Optional hybrid OR curves (cross-model: K from one run + O from another).
 # Set HYBRID_CURVES_JSON to the path of cross_model_or_union.py's
 # --out-curves-json output to render an additional "cipher hybrid OR"
 # curve on each panel.
 HYBRID_CURVES_JSON = ('results/analysis/'
-                       'hybrid_or_la_K_sweep_O_curves.json')
+                       'hybrid_or_esm2_3b_K_kmer_aa20_O_curves.json')
 
 HYBRID_COLOR = '#6a3d9a'   # dark purple
 HYBRID_LW    = 2.6
-HYBRID_LABEL = 'cipher hybrid OR (LA K + MLP O)'
+HYBRID_LABEL = 'cipher hybrid OR (esm2_3b K + kmer_aa20_k4 O)'
 DATASETS = ['CHEN', 'GORODNICHIV', 'UCSD', 'PBIP', 'PhageHostLearn']
+
+# Fixed denominators per project policy (memory: feedback_strict_denominator).
+FIXED_DENOM_PHAGE = {'CHEN': 3, 'GORODNICHIV': 3, 'UCSD': 11,
+                     'PBIP': 103, 'PhageHostLearn': 100}  # paper-equivalent (excludes no-genome phages: 27 PHL, 1 PBIP)
+FIXED_DENOM_TOTAL = sum(FIXED_DENOM_PHAGE.values())  # 248
 
 OUT_SVG = 'results/figures/recall_at_k_per_dataset.svg'
 
@@ -69,21 +74,46 @@ def f(v):
 
 
 def load_agent6_tsv():
-    """{(dataset, model): {'n_phages': int, 'hr_at_k': dict<int,float>}}."""
+    """{(dataset, model): {'n_phages': int, 'hr_at_k': dict<int,float>}}.
+
+    Re-divides the TSV's HR (over n=127/104 from score_recall_at_k_4way.py)
+    to the project-policy headline denominator (n=100/103, paper-equivalent).
+    Numerator is unchanged because the excluded no-genome phages
+    contribute 0 hits either way."""
     out = {}
     with open(AGENT6_TSV) as fh:
         reader = csv.DictReader(fh, delimiter='\t')
         for row in reader:
             ds, model = row['dataset'], row['model']
-            n = int(row['n_phages'])
-            hrk = {int(k.split('@')[1]): float(row[k])
-                   for k in row if k.startswith('R@')}
-            out[(ds, model)] = {'n_phages': n, 'hr_at_k': hrk}
+            tsv_n = int(row['n_phages'])
+            denom = FIXED_DENOM_PHAGE.get(ds, tsv_n)
+            hrk = {}
+            for k in row:
+                if not k.startswith('R@'):
+                    continue
+                idx = int(k.split('@')[1])
+                tsv_hr = float(row[k])
+                hits = round(tsv_hr * tsv_n)
+                hrk[idx] = hits / denom
+            out[(ds, model)] = {'n_phages': denom, 'hr_at_k': hrk}
     return out
 
 
+def _hits_for(row, dataset, col_key):
+    n_strict = f(row.get(f'{dataset}_n_strict_phage'))
+    if not n_strict:
+        return {k: None for k in range(1, 21)}
+    n_strict = int(n_strict)
+    return {k: (round(f(row.get(f'{dataset}_{col_key}_phage2host_anyhit_HR{k}'))
+                       * n_strict)
+                if f(row.get(f'{dataset}_{col_key}_phage2host_anyhit_HR{k}'))
+                   is not None else None)
+            for k in range(1, 21)}
+
+
 def load_cipher_curves():
-    """{ds_or_overall: {mode: {k: float}}} for CIPHER_RUN_NAME from harvest."""
+    """{ds_or_overall: {mode: {k: float}}} for CIPHER_RUN_NAME, re-divided
+    by FIXED denominators per project policy."""
     with open(HARVEST_CSV) as fh:
         rows = list(csv.DictReader(fh))
     matches = [r for r in rows if r.get('run_name') == CIPHER_RUN_NAME]
@@ -93,16 +123,26 @@ def load_cipher_curves():
     out = {}
     for ds in DATASETS:
         out[ds] = {}
+        denom = FIXED_DENOM_PHAGE[ds]
         for mode_key, col_key in (('k_only', 'K'), ('o_only', 'O'), ('or', 'OR')):
-            curve = {k: f(r.get(f'{ds}_{col_key}_phage2host_anyhit_HR{k}'))
-                     for k in range(1, 21)}
-            out[ds][mode_key] = curve
+            hits = _hits_for(r, ds, col_key)
+            out[ds][mode_key] = {k: (hits[k] / denom if hits[k] is not None
+                                     else None)
+                                 for k in range(1, 21)}
     out['overall'] = {}
-    for mode_key, col_prefix in (('k_only', 'overall_K_anyhit_HR'),
-                                   ('o_only', 'overall_O_anyhit_HR'),
-                                   ('or',     'overall_OR_anyhit_HR')):
-        out['overall'][mode_key] = {k: f(r.get(f'{col_prefix}{k}'))
-                                    for k in range(1, 21)}
+    for mode_key, col_key in (('k_only', 'K'), ('o_only', 'O'), ('or', 'OR')):
+        num = {k: 0 for k in range(1, 21)}
+        any_data = False
+        for ds in DATASETS:
+            hits = _hits_for(r, ds, col_key)
+            for k in range(1, 21):
+                if hits[k] is not None:
+                    num[k] += hits[k]
+                    any_data = True
+        out['overall'][mode_key] = ({k: num[k] / FIXED_DENOM_TOTAL
+                                     for k in range(1, 21)}
+                                    if any_data else
+                                    {k: None for k in range(1, 21)})
     return out
 
 
@@ -127,18 +167,39 @@ def weighted_overall_from_agent6(agent6, model):
 
 def load_hybrid_curves(path):
     """Load cross_model_or_union.py output. Returns {dataset_or_overall:
-    {mode: {k: hr}}} for the hybrid model. None if file absent."""
+    {mode: {k: hr}}} for the hybrid model, RE-DIVIDED by the fixed
+    per-dataset denominator per project policy. The JSON's `n` is the
+    old buggy n_strict_phage; we recover the numerator and re-divide.
+    None if file absent."""
     if not path or not os.path.exists(path):
         return None
     with open(path) as fh:
         d = json.load(fh)
     out = {}
+    overall_num = {m: defaultdict(int) for m in ('k_only', 'o_only', 'hybrid')}
     for ds, c in d.get('datasets', {}).items():
-        out[ds] = {
-            'k_only': {int(k): v for k, v in c.get('k_only_hr@k', {}).items()},
-            'o_only': {int(k): v for k, v in c.get('o_only_hr@k', {}).items()},
-            'hybrid': {int(k): v for k, v in c.get('hybrid_hr@k', {}).items()},
-        }
+        if ds == 'overall':
+            continue
+        n_buggy = c.get('n')
+        denom = FIXED_DENOM_PHAGE.get(ds)
+        out[ds] = {}
+        for mode_in, mode_out in (('k_only_hr@k', 'k_only'),
+                                    ('o_only_hr@k', 'o_only'),
+                                    ('hybrid_hr@k', 'hybrid')):
+            curve_in = c.get(mode_in, {})
+            if n_buggy is None or denom is None:
+                out[ds][mode_out] = {int(k): v for k, v in curve_in.items()}
+                continue
+            out[ds][mode_out] = {}
+            for k, v in curve_in.items():
+                hits = round(v * n_buggy)
+                out[ds][mode_out][int(k)] = hits / denom
+                overall_num[mode_out][int(k)] += hits
+    out['overall'] = {
+        mode: {k: overall_num[mode][k] / FIXED_DENOM_TOTAL
+               for k in overall_num[mode]}
+        for mode in overall_num
+    }
     return out
 
 
@@ -171,16 +232,25 @@ def plot_panel(ax, title, n, cipher_modes, tropi_models, footnote=None,
             ax.plot(ks, ys, color=HYBRID_COLOR, lw=HYBRID_LW,
                     marker='D', markersize=4.5, label=HYBRID_LABEL)
 
-    # Annotate cipher OR at k=10 and k=20 on the weighted-overall panel
+    # Annotate cipher OR + hybrid OR at k=10 and k=20 on the
+    # weighted-overall panel. Hybrid is the top curve.
     if annotate_or:
         or_curve = (cipher_modes or {}).get('or') or {}
         for k_ann in (10, 20):
             v = or_curve.get(k_ann)
             if v is not None:
                 ax.annotate(f'{v:.3f}', xy=(k_ann, v),
-                            xytext=(0, 8), textcoords='offset points',
+                            xytext=(0, -16), textcoords='offset points',
                             ha='center', fontsize=9, fontweight='bold',
                             color=CIPHER_COLOR['or'])
+        if hybrid_curve and 'hybrid' in hybrid_curve:
+            for k_ann in (10, 20):
+                v = hybrid_curve['hybrid'].get(k_ann)
+                if v is not None:
+                    ax.annotate(f'{v:.3f}', xy=(k_ann, v),
+                                xytext=(0, 8), textcoords='offset points',
+                                ha='center', fontsize=9, fontweight='bold',
+                                color=HYBRID_COLOR)
     n_str = f'n={n}' if n is not None else 'n=?'
     ax.set_title(f'{title} ({n_str} phages)', fontsize=11, fontweight='bold')
     ax.set_xlabel('k')
