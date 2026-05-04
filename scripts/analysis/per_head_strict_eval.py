@@ -62,6 +62,7 @@ _ensure_cipher_on_path()
 from cipher.data.interactions import (
     load_interaction_pairs, load_phage_protein_mapping,
 )
+from cipher.data.proteins import load_glycan_binders, load_positive_list
 from cipher.evaluation.runner import (
     find_predict_module, load_validation_data,
 )
@@ -111,8 +112,100 @@ def _resolve_val_paths(run_dir, cli):
     }
 
 
+def _resolve_filter_spec(run_dir, cli):
+    """Build the eval-time filter spec, defaulting to the experiment's own
+    training-time filter (read from config.yaml:experiment) so the eval
+    matches what the model was trained on. Any --tools/--exclude-tools/
+    --positive-list-path/--min-sources CLI flag overrides the corresponding
+    config field.
+    """
+    exp = {}
+    cfg_path = os.path.join(run_dir, 'config.yaml')
+    if os.path.exists(cfg_path):
+        full = yaml.safe_load(open(cfg_path)) or {}
+        exp = full.get('experiment') or {}
+
+    def _split_csv(s):
+        if s is None:
+            return None
+        return [t.strip() for t in s.split(',') if t.strip()]
+
+    tools = _split_csv(cli.tools) if cli.tools is not None else exp.get('tools')
+    exclude_tools = (_split_csv(cli.exclude_tools)
+                     if cli.exclude_tools is not None else exp.get('exclude_tools'))
+    positive_list_path = (cli.positive_list_path
+                          if cli.positive_list_path is not None
+                          else exp.get('positive_list_path'))
+    min_sources = (cli.min_sources if cli.min_sources is not None
+                   else exp.get('min_sources', 1))
+    return {
+        'tools': tools,
+        'exclude_tools': exclude_tools,
+        'positive_list_path': positive_list_path,
+        'min_sources': int(min_sources or 1),
+        'glycan_binders': cli.glycan_binders,
+    }
+
+
+def _build_val_filter(filter_spec):
+    """Return a set-of-allowed-protein-ids or None (if no filter could be applied).
+
+    Loads the validation glycan_binders TSV, then mirrors the same
+    filter logic used by training (`cipher.data.training._filter_proteins`).
+    """
+    gb_path = filter_spec['glycan_binders']
+    if not gb_path or not os.path.exists(gb_path):
+        return None  # caller logs the skip
+    gb = load_glycan_binders(gb_path)
+    pids = set(gb.keys())
+
+    min_sources = filter_spec['min_sources']
+    if min_sources > 1:
+        pids = {p for p in pids
+                if int(gb[p].get('total_sources', 0)) >= min_sources}
+
+    pl = filter_spec['positive_list_path']
+    if pl:
+        if not os.path.exists(pl):
+            print(f'  WARNING: positive_list_path not found: {pl} — skipping primary filter')
+        else:
+            positive_set = load_positive_list(pl)
+            pids = {p for p in pids if p in positive_set}
+            return pids
+
+    tools = filter_spec['tools']
+    exclude_tools = filter_spec['exclude_tools']
+    if tools:
+        pids = {p for p in pids
+                if any(int(gb[p].get(t, 0)) == 1 for t in tools)}
+    if exclude_tools:
+        pids = {p for p in pids
+                if not any(int(gb[p].get(t, 0)) == 1 for t in exclude_tools)}
+    return pids
+
+
+def _apply_filter_to_mapping(phage_protein_map, allowed_pids):
+    """Restrict each phage's RBP set to allowed_pids.
+
+    Some FASTA / mapping pipelines key proteins as `cds_id` while
+    glycan_binders TSVs sometimes key as bare `cds_id` and sometimes as
+    `contig_id:cds_id`. Try both forms.
+    """
+    out = {}
+    for phage, prots in phage_protein_map.items():
+        kept = set()
+        for pid in prots:
+            if pid in allowed_pids:
+                kept.add(pid)
+            elif ':' in pid and pid.split(':', 1)[1] in allowed_pids:
+                kept.add(pid)
+        out[phage] = kept
+    return out
+
+
 def evaluate_dataset_per_head(predictor, original_predict, dataset_dir,
-                              emb_dict, pid_md5, max_k=MAX_K):
+                              emb_dict, pid_md5, max_k=MAX_K,
+                              allowed_pids=None):
     """Run all three head-modes on one dataset; return strict HR@k per mode.
 
     Emits TWO HR@k families per mode:
@@ -131,6 +224,8 @@ def evaluate_dataset_per_head(predictor, original_predict, dataset_dir,
     pairs = load_interaction_pairs(dataset_dir)
     pm_path = os.path.join(dataset_dir, 'metadata', 'phage_protein_mapping.csv')
     phage_protein_map = load_phage_protein_mapping(pm_path)
+    if allowed_pids is not None:
+        phage_protein_map = _apply_filter_to_mapping(phage_protein_map, allowed_pids)
 
     interactions = defaultdict(dict)
     serotypes = {}
@@ -294,6 +389,28 @@ def main():
                    help='Optional TSV: dataset, phage_id, k_only_rank, '
                         'o_only_rank, merged_rank, or_hit@1 — for cross-'
                         'model OR-union experiments. None values dumped as ""')
+    # ── Eval-time RBP filter (defaults: read from config.yaml:experiment so the
+    # eval matches the model's training filter; override via CLI for sweeps) ──
+    p.add_argument('--tools', default=None,
+                   help='Comma-separated tool list. Keep proteins flagged by '
+                        'AT LEAST ONE listed tool. Default: read from '
+                        'config.yaml:experiment.tools')
+    p.add_argument('--exclude-tools', default=None,
+                   help='Comma-separated tool list to exclude. Default: '
+                        'config.yaml:experiment.exclude_tools')
+    p.add_argument('--positive-list-path', default=None,
+                   help='Use this list as the primary filter (mutex with '
+                        '--tools/--exclude-tools). Default: config.yaml:'
+                        'experiment.positive_list_path')
+    p.add_argument('--min-sources', type=int, default=None,
+                   help='Minimum total_sources from glycan_binders TSV. '
+                        'Default: config.yaml:experiment.min_sources or 1.')
+    p.add_argument('--glycan-binders', default=None,
+                   help='Path to validation glycan_binders_custom.tsv. '
+                        'Required for --tools/--exclude-tools/--min-sources '
+                        'filtering. If omitted, no filter is applied (legacy '
+                        'behavior — eval uses every protein in '
+                        'phage_protein_mapping.csv).')
     args = p.parse_args()
 
     if not os.path.isdir(args.experiment_dir):
@@ -317,6 +434,24 @@ def main():
     val = load_validation_data(paths['fasta'], paths['emb'], paths['ds_dir'],
                                val_embedding_file_2=paths['emb2'])
 
+    # ── Build the eval-time RBP filter from CLI + experiment config ──
+    filter_spec = _resolve_filter_spec(args.experiment_dir, args)
+    allowed_pids = None
+    if filter_spec['glycan_binders']:
+        allowed_pids = _build_val_filter(filter_spec)
+        if allowed_pids is None:
+            print(f'  WARNING: glycan_binders TSV not found at '
+                  f'{filter_spec["glycan_binders"]} — skipping filter')
+        else:
+            print(f'Filter: tools={filter_spec["tools"]} '
+                  f'exclude_tools={filter_spec["exclude_tools"]} '
+                  f'positive_list={filter_spec["positive_list_path"]} '
+                  f'min_sources={filter_spec["min_sources"]}')
+            print(f'  -> {len(allowed_pids):,} proteins pass eval-side filter')
+    else:
+        print('Filter: none (no --glycan-binders passed; eval uses every '
+              'protein in phage_protein_mapping.csv — legacy behavior)')
+
     datasets = args.datasets or val['available_datasets']
     out = {}
     per_phage_all = {}  # {dataset: {mode: {phage: rank}}}
@@ -328,7 +463,8 @@ def main():
         print(f'  {ds} ...', end='', flush=True)
         out[ds], per_phage_all[ds] = evaluate_dataset_per_head(
             predictor, original_predict, ds_dir,
-            val['emb_dict'], val['pid_md5'])
+            val['emb_dict'], val['pid_md5'],
+            allowed_pids=allowed_pids)
         out[ds]['dataset'] = ds
         # Headline (any-hit, phage-level) — best over the three head-modes.
         best_any = max(

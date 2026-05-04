@@ -36,41 +36,36 @@ import numpy as np
 import torch
 
 
-# Standard 20-letter AA alphabet, sorted alphabetically — the canonical
-# enumeration for the kmer_aa20_kN feature index space.
-AA20 = list('ACDEFGHIKLMNPQRSTVWY')
+# Symbol enumerations per alphabet — must match
+# klebsiella/scripts/data_prep/compute_kmer_features.py exactly.
+# Order matters: this is the canonical lexicographic enumeration that
+# defines the feature index → kmer string mapping.
+ALPHABETS = {
+    'aa20':    list('ACDEFGHIKLMNPQRSTVWY'),       # 20 standard AAs sorted
+    'murphy8': list('ABCDEFGH'),                   # 8 chemistry classes
+    'murphy10': list('ABCDEFGHIJ'),                # 10 chemistry classes
+    'murphy4': list('ABCD'),                       # 4 chemistry classes
+    'li10':    list('ABCDEFGHIJ'),                 # 10 li clusters
+    'hydro3':  list('HNP'),                        # 3 hydrophobicity bins
+}
 
 
-# Specific 4-mers from agent 5's analysis 32 (motif candidates) and
-# analysis 33 (alternative high-enrichment candidates). Reported in the
-# crosscheck output regardless of where they rank in the main TSV.
-MOTIF_4MERS_ANALYSIS_32 = [
-    'VFRN', 'FRNS', 'IWKN', 'WKNS',
-    'GLVE', 'LVEL', 'GIID', 'IIDV',
-    'GDVI', 'DVIN', 'AEVL', 'EVLN',
-    'ARSV', 'RSVW', 'ARTV', 'RTVW', 'GRSI', 'RSIY',
-    'SVWL', 'TVWL', 'SIYI',
-]
-ALT_4MERS_ANALYSIS_33 = [
-    'PLCE', 'DPLC', 'GKTH', 'QKQA', 'QNYT', 'SHQT', 'YSHQ', 'PGRP',
-    'YNWD', 'NYTQ', 'VMPC', 'CRLG', 'HPWF', 'CENE', 'WLSM',
-]
-
-
-def kmer_idx_to_str(idx):
-    """Map feature index → AA20 4-mer string (canonical alphabetical enumeration)."""
+def kmer_idx_to_str(idx, alphabet, k):
+    """Map feature index → kmer string (canonical lexicographic enumeration)."""
+    n = len(alphabet)
     chars = []
-    for _ in range(4):
-        chars.append(AA20[idx % 20])
-        idx //= 20
+    for _ in range(k):
+        chars.append(alphabet[idx % n])
+        idx //= n
     return ''.join(reversed(chars))
 
 
-def kmer_str_to_idx(kmer):
-    """Inverse — AA20 4-letter string → feature index. Raises on invalid char."""
+def kmer_str_to_idx(kmer, alphabet):
+    """Inverse — kmer string → feature index. Raises on invalid char."""
+    n = len(alphabet)
     idx = 0
     for ch in kmer:
-        idx = idx * 20 + AA20.index(ch)
+        idx = idx * n + alphabet.index(ch)
     return idx
 
 
@@ -169,6 +164,14 @@ def main():
     ap.add_argument('--val-datasets-dir', required=True)
     ap.add_argument('--target-class', default='K1',
                     help='K-type to condition attention on (default K1)')
+    ap.add_argument('--alphabet', default='aa20',
+                    choices=list(ALPHABETS.keys()),
+                    help='kmer alphabet — must match the trained model')
+    ap.add_argument('--k', type=int, default=4,
+                    help='kmer size — must match the trained model')
+    ap.add_argument('--crosscheck-json', default=None,
+                    help='optional JSON file mapping {source_label: [kmer, ...]} '
+                         'for the crosscheck output. If omitted, no crosscheck file is written.')
     ap.add_argument('--top-n', type=int, default=300)
     ap.add_argument('--require-correct', action='store_true', default=True,
                     help='only use phages where the K-head ranks the target '
@@ -179,6 +182,9 @@ def main():
     ap.add_argument('--out-tsv', required=True)
     ap.add_argument('--cipher-src', default=None)
     args = ap.parse_args()
+
+    alphabet = ALPHABETS[args.alphabet]
+    expected_dim = len(alphabet) ** args.k
 
     print(f'[load] predictor from {args.experiment_dir}')
     model, k_classes = load_predictor(args.experiment_dir, args.cipher_src)
@@ -198,8 +204,9 @@ def main():
     sample = emb[emb.files[0]]
     feat_dim = sample.shape[-1]
     print(f'  {n_emb} embeddings, feature dim = {feat_dim}')
-    if feat_dim != 160000:
-        print(f'  WARNING: expected 160000-d kmer features, got {feat_dim}')
+    if feat_dim != expected_dim:
+        print(f'  WARNING: expected {expected_dim}-d {args.alphabet}_k{args.k} '
+              f'features, got {feat_dim}')
 
     print(f'[load] target-class phages from {args.val_datasets_dir}')
     target_phages = collect_target_class_phages(args.val_datasets_dir, args.target_class)
@@ -257,28 +264,28 @@ def main():
         w.writerow(['rank', 'kmer', 'mean_attention',
                      f'n_phages_contributed_{args.target_class}'])
         for rank, idx in enumerate(order[:args.top_n], 1):
-            kmer = kmer_idx_to_str(int(idx))
+            kmer = kmer_idx_to_str(int(idx), alphabet, args.k)
             w.writerow([rank, kmer, f'{mean_attn[idx]:.6f}', n_phages])
     print(f'[write] top-{args.top_n}: {args.out_tsv}')
 
-    # ── Crosscheck output: specific 4-mers regardless of rank ──
-    cc_path = args.out_tsv.replace('.tsv', '.crosscheck.tsv')
-    if cc_path == args.out_tsv:
-        cc_path = args.out_tsv + '.crosscheck'
-    rank_lookup = {int(o): r for r, o in enumerate(order, 1)}
-    with open(cc_path, 'w', newline='') as f:
-        w = csv.writer(f, delimiter='\t')
-        w.writerow(['source', 'kmer', 'rank', 'mean_attention',
-                     f'n_phages_contributed_{args.target_class}'])
-        for source, lst in [
-            ('analysis_32_motif', MOTIF_4MERS_ANALYSIS_32),
-            ('analysis_33_alt',   ALT_4MERS_ANALYSIS_33),
-        ]:
-            for kmer in lst:
-                idx = kmer_str_to_idx(kmer)
-                w.writerow([source, kmer, rank_lookup[idx],
-                            f'{mean_attn[idx]:.6f}', n_phages])
-    print(f'[write] crosscheck: {cc_path}')
+    # ── Crosscheck output: specific kmers regardless of rank ──
+    if args.crosscheck_json:
+        with open(args.crosscheck_json) as f:
+            crosscheck = json.load(f)
+        cc_path = args.out_tsv.replace('.tsv', '.crosscheck.tsv')
+        if cc_path == args.out_tsv:
+            cc_path = args.out_tsv + '.crosscheck'
+        rank_lookup = {int(o): r for r, o in enumerate(order, 1)}
+        with open(cc_path, 'w', newline='') as f:
+            w = csv.writer(f, delimiter='\t')
+            w.writerow(['source', 'kmer', 'rank', 'mean_attention',
+                         f'n_phages_contributed_{args.target_class}'])
+            for source, lst in crosscheck.items():
+                for kmer in lst:
+                    idx = kmer_str_to_idx(kmer, alphabet)
+                    w.writerow([source, kmer, rank_lookup[idx],
+                                f'{mean_attn[idx]:.6f}', n_phages])
+        print(f'[write] crosscheck: {cc_path}')
 
 
 if __name__ == '__main__':
