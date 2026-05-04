@@ -69,7 +69,12 @@ NAME="strict_eval_$(basename "$EXP_DIR" | head -c 24)_$(date +%Y%m%d_%H%M%S)"
 GPUS=1
 CPUS=4
 MEM="32G"
-TIME="0:30:00"
+# Generous default — per-class architectures (binary_mlp's 156 K-heads,
+# 22 O-heads) run inference sequentially per class, so PHL with
+# n_candidates×n_proteins×n_classes forward passes can take >30 min.
+# Better to over-allocate than time-out partway through. Override with
+# TIME=NN:MM:SS env var if a particular run is known fast.
+TIME="${TIME:-4:00:00}"
 
 mkdir -p "${CIPHER_DIR}/logs"
 LOG="${CIPHER_DIR}/logs/${NAME}_%j.log"
