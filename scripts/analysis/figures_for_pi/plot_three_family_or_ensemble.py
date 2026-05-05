@@ -1,16 +1,18 @@
-"""6-source OR ensemble: best K-head per family + best O-head per family.
+"""6-source voting ensemble: best K-head per family + best O-head per family,
+combined by average-rank vote within each head, then OR (min) across heads.
 
 Three families (ESM-2, ProtT5, k-mer) each contribute a K-head and an
-O-head. For each (dataset, phage), the ensemble rank is the min over
-all 6 sources of the phage's best-positive-host rank. A phage is
-ensemble-hit at rank ≤ k if any of the 6 sources got a positive host
-at rank ≤ k.
+O-head. For each (dataset, phage):
 
-This is the host-rank OR semantics (same as cipher's existing 2-model
-hybrid), extended to 6 sources. Vocabulary differences across models
-are handled naturally — a model that can't predict a class effectively
-never ranks its host at 1, so the union picks up another model's
-prediction.
+  1. K-side consensus rank = mean of the 3 K-heads' ranks for the
+     phage's true K-class (missing/sentinel ranks excluded).
+  2. O-side consensus rank = same for the 3 O-heads.
+  3. Ensemble rank = min(K-side consensus, O-side consensus).
+
+This is structurally fair to the 2-model hybrid (1 K-rank + 1 O-rank,
+OR'd) — we collapse the 3 K-heads and 3 O-heads to one consensus rank
+each before OR'ing, instead of doing a 6-way OR which would have
+triple the "shots" of the hybrid.
 
 Top-1 is the headline; Top-k for k=1..20 is computed for the curve.
 
@@ -33,7 +35,7 @@ TSV_DIR = REPO / "results" / "analysis" / "per_phage"
 OUT_DIR = REPO / "results" / "figures" / "knob_comparisons"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# 6-source ensemble (5 distinct runs, kmer reused for both heads)
+# 6-source voting ensemble (5 distinct runs, kmer reused for both heads)
 SOURCES = {
     "ESM-2_K":  ("sweep_posList_esm2_650m_seg4_cl70", "k"),
     "ESM-2_O":  ("sweep_posList_esm2_3b_mean_cl70",   "o"),
@@ -73,8 +75,28 @@ def load_tsv(run_name: str):
     return out
 
 
+def _avg_rank(ranks, sentinel=10**9):
+    """Mean of valid ranks; ignores missing (sentinel) values; sentinel if all missing.
+
+    Used to vote across multiple models on the same head — a model that
+    can't predict the phage's host (rank=sentinel) is excluded from the
+    average rather than poisoning it.
+    """
+    valid = [r for r in ranks if r < sentinel]
+    if not valid:
+        return float(sentinel)
+    return sum(valid) / len(valid)
+
+
 def compute_ensemble_rank(per_run, sources):
-    """For each (dataset, phage), return ensemble rank = min over the chosen sources."""
+    """Voting ensemble: average-rank vote within K-heads, average-rank
+    vote within O-heads, then OR (min) the two consensus ranks.
+
+    Structurally fair to the 2-model hybrid (1 K-rank + 1 O-rank, OR'd):
+    we collapse the 3 K-heads to a single consensus K-rank by averaging
+    the rank each gives the phage's true K-class, and likewise for O,
+    then OR.
+    """
     # Index per-source rank maps
     source_rank = {}
     for source_name, (run_name, head) in sources.items():
@@ -84,21 +106,24 @@ def compute_ensemble_rank(per_run, sources):
         for key, (kr, or_) in per_run[run_name].items():
             m[key] = kr if head == "k" else or_
         source_rank[source_name] = m
+
+    # Group sources by head
+    k_source_names = [n for n, (_, h) in sources.items() if h == "k"]
+    o_source_names = [n for n, (_, h) in sources.items() if h == "o"]
+
     # Union of all (dataset, phage) keys across sources
     all_keys = set()
     for m in source_rank.values():
         all_keys.update(m.keys())
+
     ensemble = {}
     per_source_ranks = {}
     for key in all_keys:
-        ranks = []
-        per_source = {}
-        for source_name in sources:
-            r = source_rank[source_name].get(key, 10**9)
-            ranks.append(r)
-            per_source[source_name] = r
-        ensemble[key] = min(ranks)
+        per_source = {src: source_rank[src].get(key, 10**9) for src in sources}
         per_source_ranks[key] = per_source
+        avg_k = _avg_rank([per_source[src] for src in k_source_names])
+        avg_o = _avg_rank([per_source[src] for src in o_source_names])
+        ensemble[key] = min(avg_k, avg_o)
     return ensemble, per_source_ranks
 
 
@@ -193,7 +218,7 @@ def main():
                 color="#1c5fa3", linewidth=2)
         ax.plot(ks, c["hybrid"], marker="s", label=f"2-model hybrid (esm2_3b K + kmer O)",
                 color="#2c8a3e", linewidth=2)
-        ax.plot(ks, c["ensemble"], marker="^", label=f"6-source ensemble (3 families × 2 heads)",
+        ax.plot(ks, c["ensemble"], marker="^", label=f"6-source voting ensemble (3 families × 2 heads)",
                 color="#b03030", linewidth=2.5)
         ax.set_title(f"{title} (n={c['n']})  Recall@k under host-rank OR")
         ax.set_xlabel("k")
@@ -223,7 +248,7 @@ def main():
             c = curves[ds]
             for label, key in [("kmer_aa20_k4 single OR", "single"),
                                ("2-model hybrid (esm2_3b K + kmer O)", "hybrid"),
-                               ("6-source ensemble", "ensemble")]:
+                               ("6-source voting ensemble", "ensemble")]:
                 w.writerow([ds, c["n"], label] + [f"{x:.4f}" for x in c[key]])
     print(f"  wrote {out_csv}")
 
