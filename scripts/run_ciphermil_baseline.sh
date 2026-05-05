@@ -29,8 +29,20 @@
 #
 # Naming: <arch>_<emb>[_<extras>]:
 #   ciphermil_prott5_xl_cl70
+#   ciphermil_esm2_3b_mean_cl70
+#   ciphermil_kmer_aa20_k4_cl70
 #
 # Env overrides:
+#   EMB_TYPE      embedding key. Recognized presets auto-fill TRAIN_EMB/VAL_EMB:
+#                   prott5_xl       — ProtT5-XL mean (1024-d, default)
+#                   esm2_3b_mean    — ESM-2 3B mean (2560-d)
+#                   esm2_650m_mean  — ESM-2 650M mean (1280-d)
+#                   kmer_aa20_k4    — kmer aa20 k=4 (160000-d sparse)
+#                 Anything else: must also set TRAIN_EMB and VAL_EMB.
+#   TRAIN_EMB     training NPZ (auto-set if EMB_TYPE is a preset)
+#   VAL_EMB       validation NPZ (auto-set if EMB_TYPE is a preset)
+#   NAME          run name (auto-generated as ciphermil_<EMB_TYPE>_cl<CLUSTER_TH>)
+#   MEM           SLURM memory (auto-bumped to 256G for kmer_aa20_k4)
 #   CIPHER_DIR    cipher-mil worktree on Delta
 #                 (default: /projects/bfzj/llindsey1/PHI_TSP/cipher-mil)
 #   DATA_DIR      ciPHer data dir (default: /projects/bfzj/llindsey1/PHI_TSP/ciPHer/data)
@@ -41,8 +53,10 @@
 #   DRY_RUN=1     render but don't submit
 #
 # Usage:
-#   bash scripts/run_ciphermil_baseline.sh
-#   DRY_RUN=1 bash scripts/run_ciphermil_baseline.sh
+#   bash scripts/run_ciphermil_baseline.sh                              # ProtT5 default
+#   EMB_TYPE=esm2_3b_mean bash scripts/run_ciphermil_baseline.sh        # ESM-2 3B
+#   EMB_TYPE=kmer_aa20_k4 bash scripts/run_ciphermil_baseline.sh        # kmer
+#   DRY_RUN=1 bash scripts/run_ciphermil_baseline.sh                    # inspect only
 
 set -euo pipefail
 
@@ -63,23 +77,63 @@ POSITIVE_LIST="${POSITIVE_LIST:-${DATA_DIR}/training_data/metadata/pipeline_posi
 CLUSTER_FILE="${CLUSTER_FILE:-${DATA_DIR}/training_data/metadata/candidates_clusters.tsv}"
 CLUSTER_TH="${CLUSTER_TH:-70}"
 
-# ProtT5-XL mean embeddings (1024-d). Same paths as the existing prott5
-# attention_mlp baselines so we can compare fairly.
-TRAIN_EMB="/projects/bfzj/llindsey1/RBP_Structural_Similarity/output/embeddings_prott5/candidates_embeddings_md5.npz"
-VAL_EMB="/work/hdd/bfzj/llindsey1/validation_embeddings_prott5/validation_embeddings_md5.npz"
-
 MODEL="ciphermil"
-EMB_TYPE="prott5_xl"
+EMB_TYPE="${EMB_TYPE:-prott5_xl}"
 
-NAME="ciphermil_prott5_xl_cl${CLUSTER_TH}"
+# Embedding presets — recognized EMB_TYPE values map to canonical NPZ
+# paths on Delta. Override TRAIN_EMB / VAL_EMB explicitly to use a
+# custom variant. Same paths as the corresponding attention_mlp
+# baselines so per-architecture comparisons are apples-to-apples.
+case "$EMB_TYPE" in
+    prott5_xl)
+        DEFAULT_TRAIN_EMB="/projects/bfzj/llindsey1/RBP_Structural_Similarity/output/embeddings_prott5/candidates_embeddings_md5.npz"
+        DEFAULT_VAL_EMB="/work/hdd/bfzj/llindsey1/validation_embeddings_prott5/validation_embeddings_md5.npz"
+        DEFAULT_MEM="64G"
+        ;;
+    esm2_3b_mean|esm2_3b)
+        DEFAULT_TRAIN_EMB="/projects/bfzj/llindsey1/RBP_Structural_Similarity/output/embeddings_esm2_3b/candidates_embeddings_md5.npz"
+        DEFAULT_VAL_EMB="/work/hdd/bfzj/llindsey1/validation_embeddings_esm2_3b/validation_embeddings_md5.npz"
+        DEFAULT_MEM="96G"   # 2560-d input → ~7M params on the trunk Linear; bag forward still small
+        ;;
+    esm2_650m_mean|esm2_650m)
+        DEFAULT_TRAIN_EMB="/projects/bfzj/llindsey1/RBP_Structural_Similarity/output/embeddings_binned/candidates_embeddings_md5.npz"
+        DEFAULT_VAL_EMB="/projects/bfzj/llindsey1/PHI_TSP/phi_tsp/klebsiella/validation_data/combined/validation_inputs/validation_embeddings_md5.npz"
+        DEFAULT_MEM="64G"
+        ;;
+    kmer_aa20_k4)
+        DEFAULT_TRAIN_EMB="/work/hdd/bfzj/llindsey1/kmer_features/candidates_aa20_k4.npz"
+        DEFAULT_VAL_EMB="/work/hdd/bfzj/llindsey1/kmer_features/validation_aa20_k4.npz"
+        # 160000-d input + the trunk Linear(160000, 800) = 128M params for
+        # the trunk alone. Plus ~70k MD5s × 160000-d float32 NPZ load.
+        # Bump memory to be safe.
+        DEFAULT_MEM="256G"
+        ;;
+    *)
+        DEFAULT_TRAIN_EMB=""
+        DEFAULT_VAL_EMB=""
+        DEFAULT_MEM="64G"
+        ;;
+esac
+
+TRAIN_EMB="${TRAIN_EMB:-${DEFAULT_TRAIN_EMB}}"
+VAL_EMB="${VAL_EMB:-${DEFAULT_VAL_EMB}}"
+
+if [ -z "$TRAIN_EMB" ] || [ -z "$VAL_EMB" ]; then
+    echo "ERROR: EMB_TYPE='${EMB_TYPE}' is not a known preset and no" >&2
+    echo "       TRAIN_EMB/VAL_EMB env vars were set." >&2
+    echo "       Recognized presets: prott5_xl, esm2_3b_mean, esm2_650m_mean, kmer_aa20_k4" >&2
+    exit 1
+fi
+
+NAME="${NAME:-ciphermil_${EMB_TYPE}_cl${CLUSTER_TH}}"
 
 # Generous SLURM allocation per the no-tight-timeouts rule. ciphermil
 # trains ONE bag at a time (no batching across bags), so per-epoch is
 # slower than a per-protein MLP. 24h covers the K head + O head safely.
 GPUS=1
 CPUS=8
-MEM="64G"     # smaller than our usual 160G — bag-by-bag training has small footprint
-TIME="24:00:00"
+MEM="${MEM:-${DEFAULT_MEM}}"
+TIME="${TIME:-24:00:00}"
 
 EXP_DIR="${CIPHER_DIR}/experiments/${MODEL}/${NAME}"
 
@@ -149,7 +203,9 @@ echo "============================================================"
 echo "ciphermil baseline"
 echo "  Name:       ${NAME}"
 echo "  Cipher dir: ${CIPHER_DIR}"
-echo "  Embedding:  ${EMB_TYPE} (1024-d ProtT5-XL mean)"
+echo "  Embedding:  ${EMB_TYPE}"
+echo "  Train NPZ:  ${TRAIN_EMB}"
+echo "  Val NPZ:    ${VAL_EMB}"
 echo "  Positive:   ${POSITIVE_LIST}"
 echo "  Cluster:    ${CLUSTER_FILE} @ cl${CLUSTER_TH}"
 echo "  SLURM:      ${TIME}, ${GPUS} GPU, ${CPUS} CPU, ${MEM}"
