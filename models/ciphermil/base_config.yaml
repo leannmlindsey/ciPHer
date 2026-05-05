@@ -1,0 +1,61 @@
+# ciphermil — attention-based multiple instance learning, ported from
+# EvoMIL (Liu et al. 2023, github.com/liudan111/EvoMIL).
+#
+# Default targets ProtT5-XL mean (1024-d) per leann's 2026-05-05 design
+# call. Architectural defaults match EvoMIL's published values
+# (L=800, D=128, K=1) since the paper reports those work well across
+# host-prediction tasks with similar bag sizes.
+#
+# Override via cipher-train CLI args.
+
+model:
+  L: 800           # feature dim after the trunk Linear (EvoMIL default)
+  D: 128           # attention bottleneck dim (EvoMIL default)
+  K: 1             # number of attention heads (EvoMIL default)
+  dropout: 0.1     # applied on the trunk's hidden activations
+
+training:
+  # EvoMIL training: lr=5e-4, weight_decay=1e-4, 150 epochs, no batching
+  # (one bag at a time). We mirror their settings as the starting point.
+  learning_rate: 0.0005
+  weight_decay: 0.0001
+  epochs: 150
+  patience: 30
+  seed: 42
+  # Phage-level stratified split (NOT protein-level — bag-level data).
+  train_ratio: 0.7
+  val_ratio: 0.15
+  # Both K and O heads are trained as SEPARATE models (no shared trunk).
+  # Per leann's 2026-05-05 design call.
+  heads: both     # 'both', 'k', or 'o'
+
+data:
+  association_map: data/training_data/metadata/host_phage_protein_map.tsv
+  glycan_binders: data/training_data/metadata/glycan_binders_custom.tsv
+  # Default to ProtT5-XL mean (1024-d) per the design call. ESM-2-3B
+  # (2560-d) and kmer_aa20_k4 (160000-d) variants will be tried after
+  # the ProtT5 baseline lands. Launcher overrides these.
+  embedding_type: prott5_xl
+  embedding_file: data/training_data/embeddings/prott5_xl_md5.npz
+
+validation:
+  val_fasta: data/validation_data/metadata/validation_rbps_all.faa
+  val_embedding_file: data/validation_data/embeddings/prott5_xl_md5.npz
+  val_datasets_dir: data/validation_data/HOST_RANGE
+
+experiment:
+  # Single-label softmax — each phage is assigned the MODE of its hosts'
+  # K-types (or O-types) and trained to predict that one class.
+  # ciphermil's bag aggregation step picks single labels per phage in
+  # train.py; the cipher-wide label_strategy field below is informational
+  # since the loss is fixed (CrossEntropyLoss) inside ciphermil/train.py.
+  label_strategy: single_label_softmax
+  single_label: true
+  # Standard cipher filter knobs (apply BEFORE bag aggregation).
+  tools: null
+  exclude_tools: null
+  min_sources: 1
+  min_class_samples: 25
+  # Filter must survive the per-protein step before becoming bag members.
+  # No max_samples_per_k by default (MIL doesn't oversample like
+  # multi-label MLP does); launcher can set it for HP sweeps.
